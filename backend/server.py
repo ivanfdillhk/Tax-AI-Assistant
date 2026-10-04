@@ -23,6 +23,8 @@ import base64
 from PIL import Image as PILImage
 from pypdf import PdfReader
 import pdfplumber
+from lxml import html as lxml_html
+from urllib.parse import urljoin
 from docx import Document as DocxDocument
 from docx.shared import Pt, RGBColor, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -181,7 +183,7 @@ def infer_peraturan_metadata(filename, content):
 
 def peraturan_from_text(filename, content, source_url):
     meta = infer_peraturan_metadata(filename, content)
-    return {"id": str(uuid.uuid4()), **meta, "body": content[:120000], "source_url": source_url, "created_at": datetime.now(timezone.utc).isoformat()}
+    return {"id": str(uuid.uuid4()), **meta, "body": content[:2000000], "source_url": source_url, "created_at": datetime.now(timezone.utc).isoformat()}
 
 def _extract_putusan_nomor(content: str):
     """Try hard to find the real Pengadilan Pajak decision number from the first ~3000 chars."""
@@ -243,7 +245,7 @@ def infer_metadata(filename: str, content: str):
 
 def document_from_text(filename: str, content: str, source_url: str):
     metadata = infer_metadata(filename, content)
-    return {**SAMPLE_PUTUSAN, "id": str(uuid.uuid4()), "slug": str(uuid.uuid4()), **metadata, "summary": content[:280].replace("\n", " "), "body": content[:120000], "source_url": source_url, "created_at": datetime.now(timezone.utc).isoformat()}
+    return {**SAMPLE_PUTUSAN, "id": str(uuid.uuid4()), "slug": str(uuid.uuid4()), **metadata, "summary": content[:280].replace("\n", " "), "body": content[:2000000], "source_url": source_url, "created_at": datetime.now(timezone.utc).isoformat()}
 
 # Add your routes to the router instead of directly to app
 async def save_uploaded_file(raw: bytes, filename: str, content_type: str, linked_type: str, linked_id: str):
@@ -373,10 +375,28 @@ async def import_public_url(payload: UrlImportRequest):
             title = fname.rsplit(".", 1)[0]
             saved_file = (response.content, fname, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
         else:
-            text = re.sub(r"<[^>]+>", " ", response.text)
-            text = re.sub(r"\s+", " ", text).strip()
+            text = _extract_html_text(response.text)
             title_match = re.search(r"<title>(.*?)</title>", response.text, re.I | re.S)
             title = title_match.group(1).strip() if title_match else ("peraturan-publik" if payload.kind == "peraturan" else "putusan-publik")
+            # JDIH / peraturan.go.id pages typically expose the FULL document only as a
+            # downloadable PDF. Follow that link to capture complete text + keep the file.
+            pdf_link = _find_pdf_url(response.text, getattr(response, "url", payload.url))
+            if pdf_link:
+                try:
+                    pr = requests.get(pdf_link, timeout=30, headers={"User-Agent": "TaxLens/1.0"}, allow_redirects=True)
+                    pr.raise_for_status()
+                    pr_ct = pr.headers.get("Content-Type", "").lower()
+                    if "pdf" in pr_ct or pdf_link.lower().split("?")[0].endswith(".pdf"):
+                        pdf_text = _extract_pdf_structured(pr.content)
+                        if len(pdf_text.strip()) > len(text.strip()):
+                            text = pdf_text
+                            fname = _external_filename(pr, pdf_link)
+                            if not fname.lower().endswith(".pdf"):
+                                fname += ".pdf"
+                            title = fname.rsplit(".", 1)[0] if title in ("peraturan-publik", "putusan-publik") else title
+                            saved_file = (pr.content, fname, "application/pdf")
+                except Exception:
+                    pass
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Isi URL tidak dapat diproses: {exc}")
     if not text.strip():
@@ -426,6 +446,28 @@ async def download_file(file_id: str, inline: bool = False):
     )
 
 
+@api_router.get("/pdf-proxy")
+async def pdf_proxy(url: str, inline: bool = True):
+    """Server-side fetch of an external PDF so it can be displayed in the app's
+    PDF viewer without being blocked by the source domain's CORS / X-Frame-Options."""
+    if not re.match(r"^https?://", url or "", re.I):
+        raise HTTPException(status_code=400, detail="URL tidak valid")
+    try:
+        r = requests.get(url, timeout=30, headers={"User-Agent": "TaxLens/1.0"}, allow_redirects=True)
+        r.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Gagal mengambil PDF: {exc}")
+    ct = r.headers.get("Content-Type", "").lower()
+    if "pdf" not in ct and not url.lower().split("?")[0].endswith(".pdf"):
+        raise HTTPException(status_code=415, detail="Konten yang diambil bukan PDF")
+    disposition = "inline" if inline else "attachment"
+    return Response(
+        content=r.content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'{disposition}; filename="dokumen.pdf"'},
+    )
+
+
 @api_router.delete("/files/{file_id}")
 async def delete_file(file_id: str):
     result = await db.files.update_one({"id": file_id, "is_deleted": False}, {"$set": {"is_deleted": True}})
@@ -458,32 +500,152 @@ def _external_filename(response, url):
     base = url.split("?")[0].rstrip("/").split("/")[-1]
     return base or "dokumen-eksternal"
 
+def _extract_pdf_plain(raw_bytes):
+    """Plain full-text extraction, page by page. Most complete, no table markup.
+    Falls back to pypdf if pdfplumber yields nothing."""
+    texts = []
+    try:
+        with pdfplumber.open(BytesIO(raw_bytes)) as pdf:
+            for page in pdf.pages:
+                t = page.extract_text() or ""
+                if t.strip():
+                    texts.append(t.strip())
+    except Exception:
+        texts = []
+    plain = "\n\n".join(texts)
+    if plain.strip():
+        return plain
+    try:
+        return "\n".join((p.extract_text() or "") for p in PdfReader(BytesIO(raw_bytes)).pages)
+    except Exception:
+        return plain
+
 def _extract_pdf_structured(raw_bytes):
-    """Extract PDF content preserving tables as [TABLE]...[/TABLE] blocks with tab-separated rows."""
+    """Extract PDF content preserving GENUINE tables as [TABLE]...[/TABLE] blocks.
+
+    Hardened for completeness:
+    - Only treats detections with >=2 rows and >=2 columns as real tables.
+    - If detected tables cover most of a page, the whole page is kept as plain text
+      (avoids false-positive table detection silently dropping body paragraphs).
+    - If the non-table filter empties a page that actually has text, falls back to
+      the page's full text.
+    - Final safety net: compares the structured result with a plain full-text pass
+      and returns whichever is more complete.
+    """
     parts = []
     try:
         with pdfplumber.open(BytesIO(raw_bytes)) as pdf:
             for page in pdf.pages:
-                tables = page.find_tables() or []
-                table_bboxes = [tbl.bbox for tbl in tables]
-                # Extract non-table text first
+                page_area = (float(page.width or 0) * float(page.height or 0)) or 1.0
+                full_text = page.extract_text() or ""
+                raw_tables = page.find_tables() or []
+                good_tables = []
+                for tbl in raw_tables:
+                    try:
+                        rows = tbl.extract() or []
+                    except Exception:
+                        rows = []
+                    ncols = max((len(r) for r in rows), default=0)
+                    if len(rows) >= 2 and ncols >= 2:
+                        good_tables.append((tbl, rows))
+                covered = 0.0
+                for tbl, _ in good_tables:
+                    x0, y0, x1, y1 = tbl.bbox
+                    covered += max(0.0, (x1 - x0)) * max(0.0, (y1 - y0))
+                # No real tables OR tables dominate the page -> keep page as plain text
+                if not good_tables or covered > 0.6 * page_area:
+                    if full_text.strip():
+                        parts.append(full_text.strip())
+                    continue
+                bboxes = [t.bbox for t, _ in good_tables]
+
                 def not_in_table(obj):
-                    for (x0, y0, x1, y1) in table_bboxes:
+                    for (x0, y0, x1, y1) in bboxes:
                         if obj["x0"] >= x0 and obj["x1"] <= x1 and obj["top"] >= y0 and obj["bottom"] <= y1:
                             return False
                     return True
+
                 page_text = page.filter(not_in_table).extract_text() or ""
                 if page_text.strip():
                     parts.append(page_text.strip())
-                for tbl in tables:
-                    rows = tbl.extract() or []
+                elif full_text.strip():
+                    parts.append(full_text.strip())
+                for _, rows in good_tables:
                     cleaned = ["\t".join((cell or "").strip().replace("\n", " ") for cell in row) for row in rows if any(cell for cell in row)]
                     if cleaned:
                         parts.append("[TABLE]\n" + "\n".join(cleaned) + "\n[/TABLE]")
     except Exception:
-        # Fallback: pypdf flat text if pdfplumber fails
-        return "\n".join((p.extract_text() or "") for p in PdfReader(BytesIO(raw_bytes)).pages)
-    return "\n\n".join(parts)
+        return _extract_pdf_plain(raw_bytes)
+    structured = "\n\n".join(parts)
+    # Completeness safety net: prefer the plain pass if it captured noticeably more text.
+    plain = _extract_pdf_plain(raw_bytes)
+    if len(plain) > len(structured) * 1.15:
+        return plain
+    return structured if structured.strip() else plain
+
+def _extract_html_text(html_str):
+    """Extract readable full text from an HTML page, stripping boilerplate
+    (scripts, styles, nav, header, footer, aside, forms) and preferring the main
+    content container so the regulation body is captured intact."""
+    try:
+        tree = lxml_html.fromstring(html_str)
+    except Exception:
+        text = re.sub(r"<[^>]+>", " ", html_str)
+        return re.sub(r"\s+", " ", text).strip()
+    for tag in tree.xpath('//script|//style|//nav|//header|//footer|//aside|//form|//noscript|//svg|//iframe'):
+        parent = tag.getparent()
+        if parent is not None:
+            parent.remove(tag)
+    body = tree.body if tree.body is not None else tree
+    node = body
+    candidates = tree.xpath(
+        '//main|//article|//*[@id="content"]|//*[@id="isi"]'
+        '|//*[contains(@class,"content")]|//*[contains(@class,"isi")]|//*[contains(@class,"detail")]'
+    )
+    if candidates:
+        best = max(candidates, key=lambda n: len((n.text_content() or "")))
+        if len((best.text_content() or "").strip()) >= 200:
+            node = best
+    # Preserve line breaks for block elements.
+    for br in node.xpath('.//br'):
+        br.tail = "\n" + (br.tail or "")
+    for block in node.xpath('.//p|.//li|.//tr|.//h1|.//h2|.//h3|.//h4|.//h5|.//blockquote'):
+        if block.tail is None:
+            block.tail = "\n"
+        else:
+            block.tail = block.tail + "\n"
+    text = node.text_content() or ""
+    lines = [re.sub(r"[ \t\u00a0]+", " ", ln).strip() for ln in text.splitlines()]
+    return "\n".join(ln for ln in lines if ln)
+
+def _find_pdf_url(html_str, base_url):
+    """Find a plausible PDF download link on an HTML page (JDIH/peraturan.go.id
+    pages usually expose the full document only as a downloadable PDF)."""
+    try:
+        tree = lxml_html.fromstring(html_str)
+    except Exception:
+        return None
+    best = None
+    for a in tree.xpath('//a[@href]'):
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        low = href.lower().split("?")[0]
+        label = (a.text_content() or "").lower()
+        score = 0
+        if low.endswith(".pdf"):
+            score = 3
+        elif ".pdf" in href.lower():
+            score = 2
+        elif "download" in href.lower() or "unduh" in label or "download" in label or "file" in low:
+            score = 1
+        if score:
+            resolved = urljoin(base_url, href)
+            if best is None or score > best[0]:
+                best = (score, resolved)
+    return best[1] if best else None
+
+
 
 def _extract_text_from_binary(filename, content_type, raw_bytes, html_text):
     lower = filename.lower(); ct = (content_type or "").lower()

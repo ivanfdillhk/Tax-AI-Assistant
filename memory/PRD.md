@@ -32,3 +32,10 @@ Import the `Tax-AI-Assistant` repo (FastAPI + MongoDB + React) from GitHub into 
 ## Notes
 - No authentication in this app.
 - Running inside Emergent → EMERGENT_LLM_KEY + Object Storage auto-available.
+
+## Update (2026-10) — 3 feature fixes
+1. **Compare Decision (side-by-side)**: 'Bandingkan sekarang' now closes the modal and opens a full-page view (`view==='compare'`) with two columns: metadata (diff-highlighted), Amar Putusan (verdict), and full Pertimbangan Hukum/body. Compare modal has two selects (first + second). Backend `/api/putusan/compare` unchanged. Verified visually by main agent.
+2. **Full PDF text extraction**: `_extract_pdf_structured` hardened against false-positive table detection (genuine tables need ≥2 rows & ≥2 cols; table-dominated pages kept as plain text; empty-filter fallback; final completeness safety net vs `_extract_pdf_plain`). Body cap raised 120k→2M chars. URL import now uses lxml (`_extract_html_text`) + follows a PDF link (`_find_pdf_url`) to grab the full document and save the original file. Backend tested 3/3.
+3. **PDF viewer (CORS)**: new `GET /api/pdf-proxy?url=&inline=1` streams external PDFs server-side (bypasses source CORS/X-Frame-Options). Frontend PDF tab priority: stored file → proxy(source_url if .pdf) → generated PDF. Backend tested 4/4.
+- Backend testing: all 9 tests passed.
+

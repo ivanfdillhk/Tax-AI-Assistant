@@ -9,6 +9,18 @@ const isPdfFile = (name) => (name || "").toLowerCase().endsWith(".pdf");
 const fileInlineUrl = (fileId) => `${API}/files/${fileId}/download?inline=1`;
 const putusanPdfUrl = (id, inline = true) => `${API}/putusan/${id}/pdf${inline ? "?inline=1" : ""}`;
 const peraturanPdfUrl = (id, inline = true) => `${API}/peraturan/${id}/pdf${inline ? "?inline=1" : ""}`;
+const looksLikePdfUrl = (u) => /\.pdf(\?|#|$)/i.test(u || "");
+const pdfProxyUrl = (u) => `${API}/pdf-proxy?inline=1&url=${encodeURIComponent(u || "")}`;
+// Resolve the best source URL for a document's PDF tab:
+// 1) stored original file (same-origin), 2) external PDF via backend proxy, 3) server-generated PDF.
+const putusanPdfTabUrl = (doc) =>
+  doc.file_id && isPdfFile(doc.original_filename) ? fileInlineUrl(doc.file_id)
+  : looksLikePdfUrl(doc.source_url) ? pdfProxyUrl(doc.source_url)
+  : putusanPdfUrl(doc.id);
+const peraturanPdfTabUrl = (doc) =>
+  doc.file_id && isPdfFile(doc.original_filename) ? fileInlineUrl(doc.file_id)
+  : looksLikePdfUrl(doc.source_url) ? pdfProxyUrl(doc.source_url)
+  : peraturanPdfUrl(doc.id);
 
 const PdfFrame = ({ url, testId }) => {
   const [blobUrl, setBlobUrl] = useState("");
@@ -48,6 +60,7 @@ const Home = () => {
   const [mobileChat, setMobileChat] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
   const [compareId, setCompareId] = useState("");
+  const [compareFirstId, setCompareFirstId] = useState("");
   const [comparison, setComparison] = useState(null);
   const [importStatus, setImportStatus] = useState("");
   const [urlOpen, setUrlOpen] = useState(false);
@@ -208,8 +221,22 @@ const Home = () => {
   };
 
   const compareDocuments = async () => {
-    if (!compareId) return;
-    const response = await axios.post(`${API}/putusan/compare`, { first_id: document.id, second_id: compareId }); setComparison(response.data);
+    const firstId = compareFirstId || document?.id;
+    if (!firstId || !compareId || firstId === compareId) return;
+    try {
+      const response = await axios.post(`${API}/putusan/compare`, { first_id: firstId, second_id: compareId });
+      setComparison(response.data);
+      setCompareOpen(false);
+      setView("compare");
+    } catch (_) {
+      showToast("Gagal memuat perbandingan. Coba lagi.");
+    }
+  };
+  const openCompare = () => {
+    setCompareFirstId(document?.id || (documents[0]?.id || ""));
+    setCompareId("");
+    if (!documents.length) searchDocuments();
+    setCompareOpen(true);
   };
 
   const loadPeraturan = async () => {
@@ -420,7 +447,7 @@ const Home = () => {
   if (!document) return <div className="loading-screen" data-testid="document-loading">Menyiapkan ruang kerja putusan…</div>;
 
   return <div className="app-shell">
-    <header className="topbar"><div className="brand brand-clickable" data-testid="brand-home" onClick={goToKnowledge}><span className="brand-mark"><Gavel size={18} /></span><span>Tax AI Assistant</span></div><nav className="topbar-nav" data-testid="topbar-nav"><button className={`topbar-nav-link ${view === "knowledge" ? "active" : ""}`} data-testid="nav-tax-knowledge" onClick={goToKnowledge}>Tax Knowledge</button><button className={`topbar-nav-link ${view === "database" || view === "putusan" ? "active" : ""}`} data-testid="nav-tax-database" onClick={goToDatabase}>Tax Database</button></nav>{view === "putusan" && <><button className="icon-button mobile-chat-trigger" data-testid="mobile-chat-button" onClick={() => setMobileChat(true)}><BrainCircuit size={18} /></button><div className="topbar-actions"><button className="outline-button" data-testid="open-branding-button" onClick={() => setBrandingOpen(true)}><Settings size={15} /> Branding</button><button className="outline-button" data-testid="open-external-button" onClick={() => setExternalOpen(true)}><Cloud size={15} /> Hubungkan Drive</button><button className="outline-button" data-testid="open-peraturan-button" onClick={() => { setPeraturanOpen(true); loadPeraturan(); }}><Scale size={15} /> Peraturan</button><button className="outline-button" data-testid="open-files-button" onClick={() => { setFilesOpen(true); loadFiles(); }}><FolderOpen size={15} /> File</button><button className="outline-button" data-testid="url-import-toggle" onClick={() => setUrlOpen((open) => !open)}><Link2 size={15} /> Impor URL</button><label className="import-button" data-testid="document-upload-label"><FileUp size={15} /> Impor PDF/DOCX/TXT<input data-testid="document-upload-input" type="file" accept=".pdf,.docx,.txt" onChange={importFile} /></label><button className="primary-button" data-testid="try-assistant-button" onClick={focusAssistant}><Sparkles size={16} /> Asisten pajak</button></div></>}</header>
+    <header className="topbar"><div className="brand brand-clickable" data-testid="brand-home" onClick={goToKnowledge}><span className="brand-mark"><Gavel size={18} /></span><span>Tax AI Assistant</span></div><nav className="topbar-nav" data-testid="topbar-nav"><button className={`topbar-nav-link ${view === "knowledge" ? "active" : ""}`} data-testid="nav-tax-knowledge" onClick={goToKnowledge}>Tax Knowledge</button><button className={`topbar-nav-link ${view === "database" || view === "putusan" || view === "compare" ? "active" : ""}`} data-testid="nav-tax-database" onClick={goToDatabase}>Tax Database</button></nav>{view === "putusan" && <><button className="icon-button mobile-chat-trigger" data-testid="mobile-chat-button" onClick={() => setMobileChat(true)}><BrainCircuit size={18} /></button><div className="topbar-actions"><button className="outline-button" data-testid="open-branding-button" onClick={() => setBrandingOpen(true)}><Settings size={15} /> Branding</button><button className="outline-button" data-testid="open-external-button" onClick={() => setExternalOpen(true)}><Cloud size={15} /> Hubungkan Drive</button><button className="outline-button" data-testid="open-peraturan-button" onClick={() => { setPeraturanOpen(true); loadPeraturan(); }}><Scale size={15} /> Peraturan</button><button className="outline-button" data-testid="open-files-button" onClick={() => { setFilesOpen(true); loadFiles(); }}><FolderOpen size={15} /> File</button><button className="outline-button" data-testid="url-import-toggle" onClick={() => setUrlOpen((open) => !open)}><Link2 size={15} /> Impor URL</button><label className="import-button" data-testid="document-upload-label"><FileUp size={15} /> Impor PDF/DOCX/TXT<input data-testid="document-upload-input" type="file" accept=".pdf,.docx,.txt" onChange={importFile} /></label><button className="primary-button" data-testid="try-assistant-button" onClick={focusAssistant}><Sparkles size={16} /> Asisten pajak</button></div></>}</header>
     {view === "knowledge" ? <main className="knowledge-landing" data-testid="knowledge-landing">
       <div className="knowledge-hero">
         <span className="knowledge-mark"><Gavel size={30} /></span>
@@ -498,7 +525,7 @@ const Home = () => {
           <button className="primary-button" type="submit" data-testid="database-search-button">Cari</button>
         </form>
         <div className="database-actions" data-testid="database-actions">
-          <button data-testid="database-open-compare" onClick={() => setCompareOpen(true)}><GitCompareArrows size={14} /> Bandingkan Putusan</button>
+          <button data-testid="database-open-compare" onClick={openCompare}><GitCompareArrows size={14} /> Bandingkan Putusan</button>
           <button data-testid="database-open-peraturan-catalog" onClick={() => { setPeraturanOpen(true); loadPeraturan(); }}><BookOpen size={14} /> Katalog Peraturan</button>
         </div>
       </div>
@@ -541,10 +568,45 @@ const Home = () => {
           </div>
         </section>
       </div>
+    </main> : view === "compare" ? <main className="compare-page" data-testid="compare-page">
+      <div className="compare-page-head">
+        <button className="crumbs-button" data-testid="compare-back-button" onClick={goToDatabase}><ChevronLeft size={16} /> Kembali ke Tax Database</button>
+        <div className="compare-page-title"><span className="eyebrow">ANALISIS BERDAMPINGAN</span><h1>Perbandingan Putusan</h1></div>
+        <button className="outline-button" data-testid="compare-reopen-button" onClick={openCompare}><GitCompareArrows size={15} /> Ganti putusan</button>
+      </div>
+      {comparison ? <>
+        {(() => { const diffCount = Object.values(comparison.differences || {}).filter(Boolean).length; return (
+          <div className="compare-diff-banner" data-testid="compare-diff-banner">{diffCount === 0 ? "Metadata kedua putusan identik." : `${diffCount} aspek metadata berbeda — ditandai di bawah.`}</div>
+        ); })()}
+        <div className="compare-columns" data-testid="compare-columns">
+          {[["first", "PUTUSAN PERTAMA"], ["second", "PUTUSAN PEMBANDING"]].map(([key, label]) => { const d = comparison[key]; const diff = comparison.differences || {}; return (
+            <section className="compare-col" data-testid={`compare-col-${key}`} key={key}>
+              <span className="compare-col-label">{label}</span>
+              <h2 className="compare-doc-title" data-testid={`compare-title-${key}`}>{d.title}</h2>
+              <div className="compare-meta">
+                <div className={diff.case_type ? "compare-meta-row is-diff" : "compare-meta-row"}><span>Jenis Sengketa</span><strong>{d.case_type || "-"}</strong></div>
+                <div className={diff.tax_type ? "compare-meta-row is-diff" : "compare-meta-row"}><span>Jenis Pajak</span><strong>{d.tax_type || "-"}</strong></div>
+                <div className="compare-meta-row"><span>Badan Peradilan</span><strong>{d.court || "-"}</strong></div>
+                <div className="compare-meta-row"><span>Majelis</span><strong>{d.panel || "-"}</strong></div>
+                <div className="compare-meta-row"><span>Tahun</span><strong>{d.year || "-"}</strong></div>
+              </div>
+              <div className="compare-section">
+                <h3 className={diff.verdict ? "compare-section-title is-diff" : "compare-section-title"}><Gavel size={14} /> Amar Putusan</h3>
+                <p className="compare-verdict" data-testid={`compare-verdict-${key}`}>{d.verdict || "Amar putusan tidak tersedia."}</p>
+              </div>
+              <div className="compare-section">
+                <h3 className="compare-section-title"><BookOpen size={14} /> Pertimbangan Hukum &amp; Isi Lengkap</h3>
+                <article className="compare-body" data-testid={`compare-body-${key}`}>{renderBodyWithTables(d.body)}</article>
+              </div>
+              <div className="compare-col-foot"><a href={d.source_url} target="_blank" rel="noreferrer">Sumber dokumen <ArrowUpRight size={13} /></a></div>
+            </section>
+          ); })}
+        </div>
+      </> : <div className="peraturan-empty" data-testid="compare-empty">Belum ada perbandingan. Pilih dua putusan untuk dibandingkan.</div>}
     </main> : <main className="workspace">
       <section className="document-column">
         <button className="crumbs crumbs-button" data-testid="document-breadcrumb" onClick={goToKnowledge}><ChevronLeft size={16} /> Tax Knowledge <span>/</span> Putusan</button>
-        <div className="search-strip"><div className="search-input-wrap"><Search size={16} /><input data-testid="putusan-search-input" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && searchDocuments()} placeholder="Cari nomor, isu, atau kata dalam putusan atau peraturan" /></div><button className="outline-button" data-testid="open-search-button" onClick={searchDocuments}>Cari</button><button className="icon-button" data-testid="search-open-peraturan-button" title="Buka katalog peraturan" onClick={() => { setPeraturanOpen(true); loadPeraturan(); }}><Scale size={17} /></button><button className="icon-button" data-testid="compare-open-button" onClick={() => setCompareOpen(true)} title="Bandingkan putusan"><GitCompareArrows size={17} /></button></div>
+        <div className="search-strip"><div className="search-input-wrap"><Search size={16} /><input data-testid="putusan-search-input" value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => event.key === "Enter" && searchDocuments()} placeholder="Cari nomor, isu, atau kata dalam putusan atau peraturan" /></div><button className="outline-button" data-testid="open-search-button" onClick={searchDocuments}>Cari</button><button className="icon-button" data-testid="search-open-peraturan-button" title="Buka katalog peraturan" onClick={() => { setPeraturanOpen(true); loadPeraturan(); }}><Scale size={17} /></button><button className="icon-button" data-testid="compare-open-button" onClick={openCompare} title="Bandingkan putusan"><GitCompareArrows size={17} /></button></div>
         {urlOpen && <form className="url-import-form" data-testid="url-import-form" onSubmit={importUrl}><div className="url-input-wrap"><Link2 size={16} /><input data-testid="url-import-input" type="url" value={urlInput} onChange={(event) => setUrlInput(event.target.value)} placeholder="Tempel URL putusan publik, misal https://..." required /></div><button className="primary-button" data-testid="url-import-submit" type="submit" disabled={importingUrl || !urlInput.trim()}>{importingUrl ? "Mengimpor…" : "Impor & baca"}</button><button className="icon-button" data-testid="url-import-close" type="button" onClick={() => { setUrlOpen(false); setUrlInput(""); }}><X size={16} /></button></form>}
         {searchOpen && <div className="search-results" data-testid="search-results"><div className="filter-row"><select data-testid="filter-year" value={filters.year} onChange={(event) => setFilters({ ...filters, year: event.target.value })}><option value="">Semua tahun</option><option value="2022">2022</option><option value="2021">2021</option></select><span className="filter-divider">Peraturan:</span><select data-testid="filter-per-jenis" value={perFilter.jenis} onChange={(event) => applyPerFilter({ jenis: event.target.value })}><option value="">Semua jenis</option><option value="UU">UU</option><option value="PP">PP</option><option value="PMK">PMK</option><option value="PER-DJP">PER-DJP</option><option value="SE-DJP">SE-DJP</option></select><select data-testid="filter-per-status" value={perFilter.status} onChange={(event) => applyPerFilter({ status: event.target.value })}><option value="">Semua status</option><option value="Berlaku">Berlaku</option><option value="Dicabut">Dicabut</option><option value="Diubah">Diubah</option></select><span>{documents.length} putusan · {peraturanResults.length} peraturan</span></div>{documents.length > 0 && <div className="result-group-label">PUTUSAN</div>}{documents.map((item) => <button className="result-item" data-testid={`search-result-${item.id}`} key={item.id} onClick={() => { loadDocument(item.id); setSearchOpen(false); }}><strong>{item.title}</strong><span>{item.tax_type} · {item.year} · {item.case_type}</span></button>)}{peraturanResults.length > 0 && <div className="result-group-label">PERATURAN</div>}{peraturanResults.map((reg) => <button className="result-item result-item-peraturan" data-testid={`search-peraturan-${reg.id}`} key={reg.id} onClick={() => { openPeraturanById(reg.id); setSearchOpen(false); }}><strong><span className={`tag tag-${reg.jenis.toLowerCase().replace("-", "")}`}>{reg.jenis}</span> {reg.nomor} — {reg.judul}</strong><span>{reg.tahun} · {reg.status}</span></button>)}{documents.length === 0 && peraturanResults.length === 0 && <div className="result-empty" data-testid="search-no-results">Tidak ada hasil untuk pencarian ini.</div>}</div>}
         <div className="import-status" data-testid="import-status">{importStatus}</div>
@@ -552,13 +614,13 @@ const Home = () => {
         <div className="meta-grid" data-testid="document-metadata"><div><span>JENIS SENGKETA</span><strong>{document.case_type}</strong></div><div><span>JENIS PAJAK</span><strong>{document.tax_type}</strong></div><div><span>BADAN PERADILAN</span><strong>{document.court}</strong></div><div><span>MAJELIS</span><strong>{document.panel}</strong></div></div>
         <div className="reader-toolbar"><span className="reader-label"><span className="status-dot" /> Dokumen terverifikasi</span><div className="doc-tabs" data-testid="doc-tabs"><button className={`doc-tab ${docTab === "teks" ? "active" : ""}`} data-testid="doc-tab-teks" onClick={() => setDocTab("teks")}><BookOpen size={14} /> Teks terformat</button><button className={`doc-tab ${docTab === "pdf" ? "active" : ""}`} data-testid="doc-tab-pdf" onClick={() => setDocTab("pdf")}><FileText size={14} /> {document.file_id && isPdfFile(document.original_filename) ? "PDF Asli" : "PDF"}</button></div><button className="icon-button" data-testid="search-document-button" title="Cari putusan lain" onClick={openSearchQuick}><Search size={17} /></button></div>
         {docTab === "pdf"
-          ? <div className="pdf-viewer" data-testid="pdf-viewer"><PdfFrame url={document.file_id && isPdfFile(document.original_filename) ? fileInlineUrl(document.file_id) : putusanPdfUrl(document.id)} testId="pdf-frame" /></div>
+          ? <div className="pdf-viewer" data-testid="pdf-viewer"><PdfFrame url={putusanPdfTabUrl(document)} testId="pdf-frame" /></div>
           : <article className="document-body" data-testid="document-body">{renderBodyWithTables(document.body, { withParagraphIds: true })}</article>}
         <footer className="source-footer"><span>Sumber dokumen</span><a data-testid="source-link" href={document.source_url} target="_blank" rel="noreferrer">Sumber publik <ArrowUpRight size={14} /></a></footer>
       </section>
       <aside className={`assistant-panel ${mobileChat ? "panel-open" : ""}`} data-testid="assistant-panel"><div className="assistant-head"><div><div className="assistant-kicker"><span className="live-dot" /> AI CONTEXTUAL ASSISTANT</div><h2>Tanya putusan ini</h2><p>Jawaban berbasis dokumen aktif</p></div><button className="icon-button close-chat" data-testid="close-chat-button" onClick={() => setMobileChat(false)}><X size={18} /></button></div><div className="model-chip" data-testid="model-indicator"><Sparkles size={14} /> GPT 5.6 Terra <span>•</span> grounded</div><div className="chat-messages" data-testid="chat-messages">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><span className="message-label">{message.role === "assistant" ? "TaxLens AI" : "Anda"}</span><p>{message.text || (loading ? "Membaca pertimbangan majelis…" : "")}</p>{message.citations?.length > 0 && <><div className="citation-list" data-testid="citation-list">{message.citations.map((citation) => <button className={`citation-chip citation-${citation.kind || "paragraf"}`} data-testid={`citation-${citation.id}`} key={citation.id} onClick={() => handleCitationClick(citation)}><span>{citation.label}</span> {citation.text}</button>)}</div><div className="export-row"><span className="export-label">UNDUH LAMPIRAN</span><button className="export-btn" data-testid={`export-pdf-${index}`} onClick={() => exportDasarHukum(message, messages[index - 1]?.text, "pdf")}><Download size={12} /> PDF</button><button className="export-btn" data-testid={`export-docx-${index}`} onClick={() => exportDasarHukum(message, messages[index - 1]?.text, "docx")}><Download size={12} /> DOCX</button><button className="export-btn export-btn-primary" data-testid={`export-bundel-${index}`} onClick={() => exportDasarHukum(message, messages[index - 1]?.text, "bundel")}><Download size={12} /> Bundel PDF</button><button className="export-btn export-btn-primary" data-testid={`export-bundel-docx-${index}`} onClick={() => exportDasarHukum(message, messages[index - 1]?.text, "bundel-docx")}><Download size={12} /> Bundel DOCX</button></div></>}</div>)}</div><div className="suggestions"><button data-testid="suggestion-summary" onClick={() => setQuestion("Apa inti pertimbangan majelis dalam putusan ini?")}>Ringkas pertimbangan</button><button data-testid="suggestion-issue" onClick={() => setQuestion("Apa isu PPN yang diputus?")}>Identifikasi isu PPN</button></div><form className="chat-form" onSubmit={sendQuestion}><textarea value={question} onChange={(event) => setQuestion(event.target.value)} data-testid="chat-question-input" placeholder="Tanyakan sesuatu tentang putusan…" rows="2" /><button className="send-button" data-testid="chat-send-button" disabled={loading || !question.trim()}><Send size={17} /></button></form><div className="assistant-note"><span>⌘</span> Jawaban AI perlu diverifikasi terhadap dokumen asli</div></aside>
     </main>}
-    {compareOpen && <div className="modal-backdrop" data-testid="compare-modal"><div className="compare-modal"><div className="modal-head"><div><span className="eyebrow">ANALISIS BERDAMPINGAN</span><h2>Bandingkan putusan</h2></div><button className="icon-button" data-testid="compare-close-button" onClick={() => setCompareOpen(false)}><X size={17} /></button></div><p className="modal-copy">Pilih putusan lain untuk melihat perbedaan metadata, amar, dan pertimbangan.</p><button className="outline-button compare-load" data-testid="compare-search-button" onClick={searchDocuments}><Search size={15} /> Muat hasil pencarian</button><select data-testid="compare-document-select" value={compareId} onChange={(event) => setCompareId(event.target.value)}><option value="">Pilih putusan kedua</option>{documents.filter((item) => item.id !== document.id).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select><button className="primary-button compare-submit" data-testid="compare-submit-button" disabled={!compareId} onClick={compareDocuments}><GitCompareArrows size={15} /> Bandingkan sekarang</button>{comparison && <div className="comparison-result" data-testid="comparison-result"><div><span>PUTUSAN AKTIF</span><strong>{comparison.first.title}</strong><p>{comparison.first.verdict}</p></div><div><span>PUTUSAN PEMBANDING</span><strong>{comparison.second.title}</strong><p>{comparison.second.verdict}</p></div><div className="difference-note">{Object.values(comparison.differences).filter(Boolean).length} aspek metadata berbeda. Baca kedua dokumen untuk menilai perbedaan pertimbangan secara utuh.</div></div>}</div></div>}
+    {compareOpen && <div className="modal-backdrop" data-testid="compare-modal"><div className="compare-modal"><div className="modal-head"><div><span className="eyebrow">ANALISIS BERDAMPINGAN</span><h2>Bandingkan putusan</h2></div><button className="icon-button" data-testid="compare-close-button" onClick={() => setCompareOpen(false)}><X size={17} /></button></div><p className="modal-copy">Pilih dua putusan untuk melihat perbandingan metadata, amar, dan pertimbangan hukum secara berdampingan.</p><button className="outline-button compare-load" data-testid="compare-search-button" onClick={searchDocuments}><Search size={15} /> Muat hasil pencarian</button><label className="compare-field-label">Putusan pertama</label><select data-testid="compare-first-select" value={compareFirstId} onChange={(event) => setCompareFirstId(event.target.value)}><option value="">Pilih putusan pertama</option>{documents.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select><label className="compare-field-label">Putusan kedua (pembanding)</label><select data-testid="compare-document-select" value={compareId} onChange={(event) => setCompareId(event.target.value)}><option value="">Pilih putusan kedua</option>{documents.filter((item) => item.id !== compareFirstId).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select>{compareFirstId && compareId && compareFirstId === compareId && <div className="difference-note">Pilih dua putusan yang berbeda.</div>}<button className="primary-button compare-submit" data-testid="compare-submit-button" disabled={!compareFirstId || !compareId || compareFirstId === compareId} onClick={compareDocuments}><GitCompareArrows size={15} /> Bandingkan sekarang</button></div></div>}
     {brandingOpen && <div className="modal-backdrop" data-testid="branding-modal"><div className="branding-modal"><div className="modal-head"><div><span className="eyebrow">BRANDING FIRMA</span><h2>Logo & Letterhead</h2></div><button className="icon-button" data-testid="branding-close-button" onClick={() => setBrandingOpen(false)}><X size={17} /></button></div><p className="modal-copy">Logo dan nama firma ini akan tercetak otomatis di setiap ekspor PDF, DOCX, dan Bundel Penelitian — langsung siap diserahkan ke klien.</p>      <div className="branding-split">
         <div className="branding-form">
           <label className="branding-field"><span>Nama Firma</span><input data-testid="branding-firm-name" type="text" value={branding.firm_name || ""} onChange={(event) => setBranding({ ...branding, firm_name: event.target.value })} placeholder="Konsultan Pajak Nusantara" /></label>
@@ -613,7 +675,7 @@ const Home = () => {
           <div className="peraturan-head"><div className="peraturan-head-top"><span className={`tag tag-${peraturanActive.jenis.toLowerCase().replace("-", "")}`}>{peraturanActive.jenis}</span><span className={`status-badge status-${peraturanActive.status.toLowerCase()}`} data-testid="peraturan-status-badge">{peraturanActive.status === "Berlaku" ? "✓ Berlaku" : peraturanActive.status === "Dicabut" ? "✕ Dicabut" : peraturanActive.status}</span><button className="outline-button status-toggle" data-testid="peraturan-status-toggle" onClick={togglePeraturanStatus}>{peraturanActive.status === "Berlaku" ? "Tandai dicabut" : "Tandai berlaku"}</button><button className="outline-button" data-testid="peraturan-download-pdf" onClick={() => window.open(peraturanPdfUrl(peraturanActive.id, false), "_blank")}><Download size={15} /> Unduh PDF</button></div><h3 data-testid="peraturan-title">{peraturanActive.judul}</h3><div className="peraturan-meta"><span>Nomor</span><strong>{peraturanActive.nomor}</strong><span>Tahun</span><strong>{peraturanActive.tahun}</strong><span>Status</span><strong>{peraturanActive.status}</strong>{peraturanActive.tanggal_berlaku && <><span>Berlaku</span><strong>{peraturanActive.tanggal_berlaku}</strong></>}{peraturanActive.dicabut_oleh && <><span>Dicabut oleh</span><strong>{peraturanActive.dicabut_oleh}</strong></>}</div>{peraturanActive.status !== "Berlaku" && <div className="status-warning" data-testid="peraturan-status-warning">Peraturan ini sudah tidak berlaku dan dikecualikan dari dasar jawaban AI.</div>}</div>
           <div className="doc-tabs doc-tabs-modal" data-testid="per-doc-tabs"><button className={`doc-tab ${perDocTab === "teks" ? "active" : ""}`} data-testid="per-doc-tab-teks" onClick={() => setPerDocTab("teks")}><BookOpen size={14} /> Teks</button><button className={`doc-tab ${perDocTab === "pdf" ? "active" : ""}`} data-testid="per-doc-tab-pdf" onClick={() => setPerDocTab("pdf")}><FileText size={14} /> {peraturanActive.file_id && isPdfFile(peraturanActive.original_filename) ? "PDF Asli" : "PDF"}</button></div>
           {perDocTab === "pdf"
-            ? <div className="pdf-viewer pdf-viewer-modal" data-testid="per-pdf-viewer"><PdfFrame url={peraturanActive.file_id && isPdfFile(peraturanActive.original_filename) ? fileInlineUrl(peraturanActive.file_id) : peraturanPdfUrl(peraturanActive.id)} testId="per-pdf-frame" /></div>
+            ? <div className="pdf-viewer pdf-viewer-modal" data-testid="per-pdf-viewer"><PdfFrame url={peraturanPdfTabUrl(peraturanActive)} testId="per-pdf-frame" /></div>
             : <article className="peraturan-body" data-testid="peraturan-body">{renderBodyWithTables(peraturanActive.body)}</article>}
           <div className="peraturan-related" data-testid="peraturan-related">
             <h4><Gavel size={14} /> Yurisprudensi — Putusan yang merujuk {peraturanActive.jenis} {peraturanActive.nomor}</h4>
