@@ -729,6 +729,97 @@ def _append_letterhead(story, branding, kicker_style, firm_style, firm_small_sty
     story.append(HRFlowable(width="100%", color=colors.HexColor("#e2e8f0")))
     story.append(Spacer(1, 4))
 
+def _md_inline(text):
+    """Convert inline markdown to ReportLab mini-HTML (after escaping)."""
+    t = _escape_html(text)
+    t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
+    t = re.sub(r"__(.+?)__", r"<b>\1</b>", t)
+    t = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", t)
+    t = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"<i>\1</i>", t)
+    t = re.sub(r"`(.+?)`", r"<font face='Courier'>\1</font>", t)
+    return t
+
+
+def _render_markdown_pdf(text, story, body_style, heading_style):
+    """Render a markdown answer into ReportLab flowables (headings, lists, bold/italic)."""
+    bullet_style = ParagraphStyle("mdBullet", parent=body_style, leftIndent=14, spaceAfter=3)
+    for raw in (text or "").split("\n"):
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        m = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+        if m:
+            story.append(Paragraph(_md_inline(m.group(2)), heading_style))
+            continue
+        if re.match(r"^([-*_]\s*){3,}$", stripped):
+            story.append(HRFlowable(width="100%", color=colors.HexColor("#e2e8f0")))
+            continue
+        m = re.match(r"^[-*•]\s+(.*)$", stripped)
+        if m:
+            story.append(Paragraph(f"•&nbsp;&nbsp;{_md_inline(m.group(1))}", bullet_style))
+            continue
+        m = re.match(r"^(\d+)[.)]\s+(.*)$", stripped)
+        if m:
+            story.append(Paragraph(f"{m.group(1)}.&nbsp;&nbsp;{_md_inline(m.group(2))}", bullet_style))
+            continue
+        story.append(Paragraph(_md_inline(stripped), body_style))
+
+
+def _md_inline_docx(paragraph, text):
+    """Add runs to a docx paragraph honouring bold/italic/code markdown."""
+    tokens = re.split(r"(\*\*.+?\*\*|__.+?__|\*.+?\*|_.+?_|`.+?`)", text or "")
+    for tok in tokens:
+        if not tok:
+            continue
+        if (tok.startswith("**") and tok.endswith("**")) or (tok.startswith("__") and tok.endswith("__")):
+            run = paragraph.add_run(tok[2:-2]); run.bold = True
+        elif (tok.startswith("*") and tok.endswith("*")) or (tok.startswith("_") and tok.endswith("_")):
+            run = paragraph.add_run(tok[1:-1]); run.italic = True
+        elif tok.startswith("`") and tok.endswith("`"):
+            run = paragraph.add_run(tok[1:-1]); run.font.name = "Consolas"
+        else:
+            paragraph.add_run(tok)
+
+
+def _render_markdown_docx(docx, text):
+    """Render a markdown answer into docx paragraphs (headings, lists, bold/italic)."""
+    for raw in (text or "").split("\n"):
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        m = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+        if m:
+            _docx_add_heading(docx, m.group(2), size=12)
+            continue
+        m = re.match(r"^[-*•]\s+(.*)$", stripped)
+        if m:
+            _md_inline_docx(docx.add_paragraph(style="List Bullet"), m.group(1))
+            continue
+        m = re.match(r"^(\d+)[.)]\s+(.*)$", stripped)
+        if m:
+            _md_inline_docx(docx.add_paragraph(style="List Number"), m.group(2))
+            continue
+        _md_inline_docx(docx.add_paragraph(), stripped)
+
+
+def _make_pdf_footer(firm_name):
+    """Return an onPage callback that draws a letterhead footer with page numbers."""
+    label = (firm_name or "TaxLens").strip()[:90]
+
+    def _footer(canvas, doc):
+        canvas.saveState()
+        canvas.setStrokeColor(colors.HexColor("#e2e8f0"))
+        canvas.line(18 * mm, 13 * mm, A4[0] - 18 * mm, 13 * mm)
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(colors.HexColor("#94a3b8"))
+        canvas.drawString(18 * mm, 9 * mm, label)
+        canvas.drawCentredString(A4[0] / 2, 9 * mm, "TaxLens · dokumen untuk berkas sengketa")
+        canvas.drawRightString(A4[0] - 18 * mm, 9 * mm, f"Halaman {doc.page}")
+        canvas.restoreState()
+
+    return _footer
+
+
 @api_router.post("/export/dasar-hukum")
 async def export_dasar_hukum(payload: ExportRequest):
     document = await get_putusan(payload.document_id)
@@ -779,9 +870,7 @@ async def export_dasar_hukum(payload: ExportRequest):
     story.append(Paragraph(_escape_html(payload.question), body))
 
     story.append(Paragraph("2. Jawaban AI (GPT 5.6 Terra)", h2))
-    for line in payload.answer.split("\n"):
-        if line.strip():
-            story.append(Paragraph(_escape_html(line), body))
+    _render_markdown_pdf(payload.answer, story, body, h2)
 
     para_cites = [c for c in payload.citations if c.kind != "peraturan"]
     reg_cites = [c for c in payload.citations if c.kind == "peraturan"]
@@ -810,7 +899,8 @@ async def export_dasar_hukum(payload: ExportRequest):
     story.append(HRFlowable(width="100%", color=colors.HexColor("#e2e8f0")))
     story.append(Paragraph(f"Dokumen ini dihasilkan otomatis oleh TaxLens AI pada {datetime.now(timezone.utc).strftime('%d %B %Y %H:%M UTC')}. Jawaban AI bersifat referensi analitik dan wajib diverifikasi terhadap peraturan serta putusan asli. Peraturan yang berstatus Dicabut dikecualikan dari dasar jawaban.", small))
 
-    doc.build(story)
+    _footer = _make_pdf_footer(branding.get("firm_name"))
+    doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
     buffer.seek(0)
     filename = f"dasar-hukum-{document.get('slug') or document['id']}.pdf"
     return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
@@ -879,9 +969,7 @@ async def export_dasar_hukum_docx(payload: ExportRequest):
     _docx_add_heading(docx, "1. Pertanyaan", size=12)
     docx.add_paragraph(payload.question)
     _docx_add_heading(docx, "2. Jawaban AI (GPT 5.6 Terra)", size=12)
-    for line in payload.answer.split("\n"):
-        if line.strip():
-            docx.add_paragraph(line)
+    _render_markdown_docx(docx, payload.answer)
 
     para_cites = [c for c in payload.citations if c.kind != "peraturan"]
     reg_cites = [c for c in payload.citations if c.kind == "peraturan"]
@@ -967,9 +1055,7 @@ async def export_bundel(payload: ExportRequest):
     story.append(Paragraph("Pertanyaan", h2))
     story.append(Paragraph(_escape_html(payload.question), body))
     story.append(Paragraph("Jawaban AI (GPT 5.6 Terra)", h2))
-    for line in payload.answer.split("\n"):
-        if line.strip():
-            story.append(Paragraph(_escape_html(line), body))
+    _render_markdown_pdf(payload.answer, story, body, h2)
 
     # Putusan utama
     story.append(PageBreak())
@@ -1023,10 +1109,109 @@ async def export_bundel(payload: ExportRequest):
     story.append(HRFlowable(width="100%", color=colors.HexColor("#e2e8f0")))
     story.append(Paragraph(f"Bundel ini dihasilkan otomatis oleh TaxLens AI pada {datetime.now(timezone.utc).strftime('%d %B %Y %H:%M UTC')}. Peraturan berstatus Dicabut tidak dimasukkan sebagai dasar hukum. Jawaban AI wajib diverifikasi terhadap dokumen asli.", small))
 
-    doc.build(story)
+    _footer = _make_pdf_footer(branding.get("firm_name"))
+    doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
     buffer.seek(0)
     filename = f"bundel-penelitian-{document.get('slug') or document['id']}.pdf"
     return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+@api_router.post("/export/bundel-docx")
+async def export_bundel_docx(payload: ExportRequest):
+    document = await get_putusan(payload.document_id)
+    paragraphs = paragraph_records(document["body"])
+    peraturan_ids = [c.peraturan_id for c in payload.citations if c.kind == "peraturan" and c.peraturan_id]
+    peraturan_docs = []
+    if peraturan_ids:
+        peraturan_docs = await db.peraturan.find({"id": {"$in": peraturan_ids}}, {"_id": 0}).to_list(50)
+    related = []
+    for reg in peraturan_docs:
+        try:
+            related_resp = await peraturan_related_putusan(reg["id"])
+            related.append((reg, related_resp.get("putusan", [])))
+        except Exception:
+            related.append((reg, []))
+    branding = await _get_branding()
+
+    docx = DocxDocument()
+    for section in docx.sections:
+        section.top_margin = Cm(2); section.bottom_margin = Cm(2); section.left_margin = Cm(2); section.right_margin = Cm(2)
+
+    logo_buf = _decode_logo(branding.get("logo_base64"))
+    if logo_buf:
+        logo_para = docx.add_paragraph()
+        try:
+            logo_para.add_run().add_picture(logo_buf, height=Cm(1.4))
+        except Exception:
+            pass
+    firm_name = (branding.get("firm_name") or "").strip()
+    if firm_name:
+        p = docx.add_paragraph(); r = p.add_run(firm_name); r.bold = True; r.font.size = Pt(12); r.font.color.rgb = RGBColor.from_string("0F172A")
+    firm_address = (branding.get("firm_address") or "").strip()
+    if firm_address:
+        p = docx.add_paragraph(); r = p.add_run(firm_address); r.font.size = Pt(9); r.font.color.rgb = RGBColor.from_string("475569")
+    firm_tagline = (branding.get("tagline") or "").strip()
+    if firm_tagline:
+        p = docx.add_paragraph(); r = p.add_run(firm_tagline); r.italic = True; r.font.size = Pt(9); r.font.color.rgb = RGBColor.from_string("475569")
+
+    p = docx.add_paragraph(); r = p.add_run("TAXLENS · BUNDEL PENELITIAN PAJAK"); r.bold = True; r.font.size = Pt(8); r.font.color.rgb = RGBColor.from_string("0F766E")
+    p = docx.add_paragraph(); r = p.add_run("Dasar Hukum & Yurisprudensi"); r.bold = True; r.font.size = Pt(20); r.font.color.rgb = RGBColor.from_string("0F172A")
+    p = docx.add_paragraph(); r = p.add_run(document["title"]); r.bold = True; r.font.size = Pt(14); r.font.color.rgb = RGBColor.from_string("0F172A")
+    meta = docx.add_paragraph()
+    meta.add_run(f"Jenis Sengketa: {document.get('case_type','-')}  ·  Jenis Pajak: {document.get('tax_type','-')}  ·  Tahun: {document.get('year','-')}\n")
+    meta.add_run(f"Badan Peradilan: {document.get('court','-')}  ·  Majelis: {document.get('panel','-')}")
+    for run in meta.runs:
+        run.font.size = Pt(9); run.font.color.rgb = RGBColor.from_string("475569")
+
+    _docx_add_heading(docx, "Pertanyaan", size=12)
+    docx.add_paragraph(payload.question)
+    _docx_add_heading(docx, "Jawaban AI (GPT 5.6 Terra)", size=12)
+    _render_markdown_docx(docx, payload.answer)
+
+    docx.add_page_break()
+    _docx_add_heading(docx, "Putusan Utama", size=15, color="#0F172A")
+    p = docx.add_paragraph(); r = p.add_run(document["title"]); r.bold = True; r.font.size = Pt(12)
+    if document.get("summary"):
+        p = docx.add_paragraph(); r = p.add_run(document["summary"]); r.italic = True; r.font.size = Pt(9); r.font.color.rgb = RGBColor.from_string("64748B")
+    for item in paragraphs:
+        para = docx.add_paragraph()
+        lbl = para.add_run(f"[{item['id']}] "); lbl.bold = True; lbl.font.color.rgb = RGBColor.from_string("1D4ED8")
+        para.add_run(item["text"])
+    if document.get("source_url"):
+        p = docx.add_paragraph(); r = p.add_run(f"Sumber: {document['source_url']}"); r.font.size = Pt(8); r.font.color.rgb = RGBColor.from_string("64748B")
+
+    if peraturan_docs:
+        docx.add_page_break()
+        _docx_add_heading(docx, "Dasar Hukum", size=15, color="#0F172A")
+        for reg in peraturan_docs:
+            p = docx.add_paragraph(); r = p.add_run(f"{reg['jenis']} {reg['nomor']} · {reg.get('status','Berlaku')}"); r.bold = True; r.font.size = Pt(12); r.font.color.rgb = RGBColor.from_string("1E293B")
+            docx.add_paragraph(reg["judul"])
+            p = docx.add_paragraph(); r = p.add_run(f"Tahun: {reg.get('tahun','-')}  ·  Berlaku sejak: {reg.get('tanggal_berlaku') or '-'}"); r.font.size = Pt(9); r.font.color.rgb = RGBColor.from_string("64748B")
+            for line in (reg.get("body") or "").split("\n"):
+                if line.strip():
+                    q = docx.add_paragraph(line); q.paragraph_format.left_indent = Cm(0.5)
+            if reg.get("source_url"):
+                p = docx.add_paragraph(); r = p.add_run(f"Sumber: {reg['source_url']}"); r.font.size = Pt(8); r.font.color.rgb = RGBColor.from_string("64748B")
+
+    if related:
+        docx.add_page_break()
+        _docx_add_heading(docx, "Yurisprudensi Terkait", size=15, color="#0F172A")
+        for reg, items in related:
+            p = docx.add_paragraph(); r = p.add_run(f"{reg['jenis']} {reg['nomor']} — {reg['judul'][:120]}"); r.bold = True; r.font.size = Pt(11); r.font.color.rgb = RGBColor.from_string("1E293B")
+            if not items:
+                p = docx.add_paragraph(); r = p.add_run("Belum ada putusan dalam katalog yang merujuk peraturan ini."); r.italic = True; r.font.size = Pt(9); r.font.color.rgb = RGBColor.from_string("64748B")
+                continue
+            for item in items:
+                docx.add_paragraph(
+                    f"{item['title']} — {item.get('tax_type','-')} · {item.get('year','-')} · {item.get('case_type','-')} · {item.get('match_count',0)}× dirujuk",
+                    style="List Bullet",
+                )
+
+    footer = docx.add_paragraph(); r = footer.add_run(f"Bundel ini dihasilkan otomatis oleh TaxLens AI pada {datetime.now(timezone.utc).strftime('%d %B %Y %H:%M UTC')}. Peraturan berstatus Dicabut tidak dimasukkan sebagai dasar hukum. Jawaban AI wajib diverifikasi terhadap dokumen asli."); r.font.size = Pt(8); r.font.color.rgb = RGBColor.from_string("64748B")
+
+    buffer = BytesIO(); docx.save(buffer); buffer.seek(0)
+    filename = f"bundel-penelitian-{document.get('slug') or document['id']}.docx"
+    return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
 
 @api_router.post("/status", response_model=StatusCheck)
 async def create_status_check(input: StatusCheckCreate):
