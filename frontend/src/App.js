@@ -620,7 +620,6 @@ const Home = () => {
             {peraturanRelated.length === 0 ? <div className="peraturan-related-empty">Belum ada putusan dalam katalog yang merujuk peraturan ini.</div> :
               <div className="peraturan-related-list">{peraturanRelated.map((item) => <button key={item.id} className="related-item" data-testid={`related-putusan-${item.id}`} onClick={() => { loadDocument(item.id); setPeraturanOpen(false); }}><strong>{item.title}</strong><span>{item.tax_type} · {item.year} · {item.case_type} · {item.match_count}× dirujuk</span></button>)}</div>}
           </div>
-          {peraturanActive.source_url && <footer className="source-footer"><span>Sumber</span><a data-testid="peraturan-source-link" href={peraturanActive.source_url} target="_blank" rel="noreferrer">Buka sumber publik <ArrowUpRight size={14} /></a></footer>}
         </> : <div className="peraturan-empty">Pilih peraturan di sebelah kiri untuk melihat detail pasal.</div>}</div>
       </div>
     </div></div>}
