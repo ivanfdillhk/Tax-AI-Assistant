@@ -1,0 +1,50 @@
+{
+  "app_name": "InaPintar Tax Knowledge Hub & AI Contextual Assistant",
+  "archetype": "Swiss & High-Contrast (Authority, Clarity, Truth) for Enterprise Tax Practitioners",
+  "color_system": {
+    "primary": "#0F172A",
+    "accent_signal": "#2563EB",
+    "neutral_bg": "#F8FAFC",
+    "surface_white": "#FFFFFF",
+    "border_subtle": "#E2E8F0",
+    "text_dark": "#0F172A",
+    "text_muted": "#64748B",
+    "highlight_gold": "#D97706"
+  },
+  "typography": {
+    "headings": "Cabinet Grotesk, Outfit, sans-serif",
+    "body": "Inter, IBM Plex Sans, sans-serif",
+    "mono": "JetBrains Mono, monospace"
+  },
+  "visual_enhancers": {
+    "glassmorphism": "backdrop-blur-xl bg-white/80 border border-slate-200/60 shadow-lg shadow-slate-900/5",
+    "borders": "1px solid #E2E8F0",
+    "radius": "rounded-lg"
+  },
+  "ai_models_supported": [
+    "GPT-5.6 Terra",
+    "Gemini 3 Flash"
+  ],
+  "key_features": [
+    "Putusan Pajak Detail View with metadata (Nomor Putusan, Tahun, Jenis Pajak, Majelis Hakim, Amar Putusan)",
+    "Full text document reader with search, highlight, and copy citation",
+    "Interactive AI Contextual Assistant panel on the side powered by GPT-5.6 Terra & Gemini 3 Flash",
+    "Multi-source search & filter across 81,000+ tax judgments and regulations",
+    "Dataset/file upload simulation to load custom tax rulings",
+    "Public source public data integration & citation linking"
+  ],
+  "image_urls": {
+    "court_architecture": "https://images.unsplash.com/photo-1673728816987-b085a6d41111?crop=entropy&cs=srgb&fm=jpg&q=85",
+    "pillars_justice": "https://images.unsplash.com/photo-1780445333331-32049679a0be?crop=entropy&cs=srgb&fm=jpg&q=85"
+  },
+  "accessibility": {
+    "contrast_ratio": "APCA and WCAG AA compliant (>4.5:1 for normal text, >3:1 for large text)",
+    "interactive_elements": "Explicit focus rings and hover states on all buttons and inputs with data-testid attributes"
+  },
+  "universal_guidelines": [
+    "All interactive elements must include data-testid attributes",
+    "No universal transition: all",
+    "Generous padding and spacing",
+    "Distinct typography hierarchy with tight letter spacing on headings"
+  ]
+}
