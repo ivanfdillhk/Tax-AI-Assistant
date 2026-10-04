@@ -304,6 +304,19 @@ async def list_putusan(q: Optional[str] = None, year: Optional[str] = None, tax_
         documents = [SAMPLE_PUTUSAN]
     return documents
 
+@api_router.get("/putusan/{document_id}/pdf")
+async def putusan_pdf(document_id: str, inline: bool = False):
+    document = await get_putusan(document_id)
+    meta = [
+        ("Jenis Sengketa", document.get("case_type", "-")),
+        ("Jenis Pajak", document.get("tax_type", "-")),
+        ("Badan Peradilan", document.get("court", "-")),
+        ("Majelis", document.get("panel", "-")),
+        ("Tahun", str(document.get("year", "-"))),
+    ]
+    filename = f"putusan-{document.get('slug') or document['id']}.pdf"
+    return await _build_document_pdf(document["title"], "TAXLENS · PUTUSAN PENGADILAN PAJAK", meta, document.get("summary"), document.get("body", ""), document.get("source_url"), inline, filename)
+
 @api_router.post("/putusan/compare")
 async def compare_putusan(payload: CompareRequest):
     first = await get_putusan(payload.first_id)
@@ -544,6 +557,22 @@ async def get_peraturan(peraturan_id: str):
     if not doc:
         raise HTTPException(status_code=404, detail="Peraturan tidak ditemukan")
     return doc
+
+@api_router.get("/peraturan/{peraturan_id}/pdf")
+async def peraturan_pdf(peraturan_id: str, inline: bool = False):
+    reg = await get_peraturan(peraturan_id)
+    meta = [
+        ("Jenis", reg.get("jenis", "-")),
+        ("Nomor", reg.get("nomor", "-")),
+        ("Tahun", str(reg.get("tahun", "-"))),
+        ("Status", reg.get("status", "Berlaku")),
+    ]
+    if reg.get("tanggal_berlaku"):
+        meta.append(("Berlaku sejak", reg["tanggal_berlaku"]))
+    if reg.get("dicabut_oleh"):
+        meta.append(("Dicabut oleh", reg["dicabut_oleh"]))
+    filename = f"peraturan-{reg['id']}.pdf"
+    return await _build_document_pdf(reg["judul"], f"TAXLENS · {reg.get('jenis', 'PERATURAN')} {reg.get('nomor', '')}", meta, None, reg.get("body", ""), reg.get("source_url"), inline, filename)
 
 @api_router.patch("/peraturan/{peraturan_id}/status")
 async def update_peraturan_status(peraturan_id: str, payload: StatusUpdateRequest):
@@ -818,6 +847,84 @@ def _make_pdf_footer(firm_name):
         canvas.restoreState()
 
     return _footer
+
+
+def _doc_pdf_styles():
+    styles = getSampleStyleSheet()
+    return {
+        "title": ParagraphStyle("DTitle", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=15, leading=19, spaceAfter=4, textColor=colors.HexColor("#0f172a")),
+        "kicker": ParagraphStyle("DKick", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=8, leading=10, textColor=colors.HexColor("#0f766e"), spaceAfter=2),
+        "firm": ParagraphStyle("DFirm", parent=styles["Normal"], fontName="Helvetica-Bold", fontSize=11, leading=13, textColor=colors.HexColor("#0f172a")),
+        "firmSmall": ParagraphStyle("DFirmS", parent=styles["Normal"], fontName="Helvetica", fontSize=8.5, leading=11, textColor=colors.HexColor("#475569")),
+        "body": ParagraphStyle("DBody", parent=styles["Normal"], fontName="Helvetica", fontSize=10, leading=14, spaceAfter=4, textColor=colors.HexColor("#1f2937")),
+        "small": ParagraphStyle("DSmall", parent=styles["Normal"], fontName="Helvetica", fontSize=8.5, leading=11, textColor=colors.HexColor("#64748b")),
+    }
+
+
+def _render_document_body_pdf(body, story, body_style):
+    """Render a document body into flowables, converting [TABLE]..[/TABLE] blocks to real tables."""
+    table_re = re.compile(r"\[TABLE\]\s*\n([\s\S]*?)\n\s*\[/TABLE\]")
+    text = body or ""
+    last = 0
+    for m in table_re.finditer(text):
+        for line in text[last:m.start()].split("\n"):
+            if line.strip():
+                story.append(Paragraph(_escape_html(line.strip()), body_style))
+        rows = [r.split("\t") for r in m.group(1).split("\n") if r.strip()]
+        if rows:
+            data = [[Paragraph(_escape_html(cell), body_style) for cell in row] for row in rows]
+            tbl = Table(data, repeatRows=1)
+            tbl.setStyle(TableStyle([
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f1f5f9")),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]))
+            story.append(Spacer(1, 4)); story.append(tbl); story.append(Spacer(1, 4))
+        last = m.end()
+    for line in text[last:].split("\n"):
+        if line.strip():
+            story.append(Paragraph(_escape_html(line.strip()), body_style))
+
+
+async def _build_document_pdf(title, kicker_text, meta_rows, summary, body, source_url, inline, filename):
+    """Generate a clean, full PDF for a putusan or peraturan from stored content."""
+    branding = await _get_branding()
+    st = _doc_pdf_styles()
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=18 * mm, bottomMargin=20 * mm, title=title)
+    story = []
+    _append_letterhead(story, branding, st["kicker"], st["firm"], st["firmSmall"], kicker_text)
+    story.append(Paragraph(_escape_html(title), st["title"]))
+    if meta_rows:
+        mt = Table([[k, v] for k, v in meta_rows], colWidths=[38 * mm, None])
+        mt.setStyle(TableStyle([
+            ("FONT", (0, 0), (-1, -1), "Helvetica", 8.5),
+            ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#64748b")),
+            ("FONTNAME", (1, 0), (1, -1), "Helvetica-Bold"),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3), ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ]))
+        story.append(mt)
+    story.append(Spacer(1, 8))
+    story.append(HRFlowable(width="100%", color=colors.HexColor("#e2e8f0")))
+    story.append(Spacer(1, 6))
+    if summary:
+        story.append(Paragraph(f"<i>{_escape_html(summary)}</i>", st["small"]))
+        story.append(Spacer(1, 6))
+    _render_document_body_pdf(body, story, st["body"])
+    if source_url:
+        story.append(Spacer(1, 8))
+        story.append(Paragraph(f"Sumber: <font color='#2563eb'>{_escape_html(source_url)}</font>", st["small"]))
+    story.append(Spacer(1, 10))
+    story.append(HRFlowable(width="100%", color=colors.HexColor("#e2e8f0")))
+    story.append(Paragraph(f"Dokumen lengkap ini dihasilkan oleh TaxLens pada {datetime.now(timezone.utc).strftime('%d %B %Y %H:%M UTC')} untuk keperluan berkas sengketa. Verifikasi terhadap dokumen asli tetap diperlukan.", st["small"]))
+    _footer = _make_pdf_footer(branding.get("firm_name"))
+    doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
+    buffer.seek(0)
+    disposition = "inline" if inline else "attachment"
+    return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f'{disposition}; filename="{filename}"'})
 
 
 @api_router.post("/export/dasar-hukum")
