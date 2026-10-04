@@ -471,7 +471,6 @@ const Home = () => {
       <div className="database-hero">
         <span className="knowledge-mark"><Scale size={30} /></span>
         <h1 className="knowledge-title">Tax Database</h1>
-        <p className="knowledge-sub">Koleksi internal TaxLens — putusan pengadilan pajak &amp; peraturan perpajakan dalam satu tempat.</p>
         <form className="knowledge-search" data-testid="database-search-form" onSubmit={(event) => { event.preventDefault(); loadDatabase(); }}>
           <Search size={20} />
           <input data-testid="database-search-input" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Cari nomor, isu, atau kata dalam putusan atau peraturan" />
