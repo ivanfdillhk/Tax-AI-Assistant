@@ -121,12 +121,13 @@ const Home = () => {
     });
   };
   const goToKnowledge = () => { setView("knowledge"); setSearchOpen(false); setPeraturanOpen(false); };
-  const loadDatabase = async (filterOverride) => {
+  const loadDatabase = async (filterOverride, queryOverride) => {
     const f = filterOverride || filters;
+    const q = queryOverride !== undefined ? queryOverride : query;
     try {
       const [putusanRes, peraturanRes] = await Promise.all([
-        axios.get(`${API}/putusan`, { params: { q: query || undefined, year: f.year || undefined, case_type: f.case_type || undefined } }),
-        axios.get(`${API}/peraturan`, { params: { q: query || undefined, jenis: perFilter.jenis || undefined, status: perFilter.status || undefined } }).catch(() => ({ data: [] })),
+        axios.get(`${API}/putusan`, { params: { q: q || undefined, year: f.year || undefined, case_type: f.case_type || undefined } }),
+        axios.get(`${API}/peraturan`, { params: { q: q || undefined, jenis: perFilter.jenis || undefined, status: perFilter.status || undefined } }).catch(() => ({ data: [] })),
       ]);
       setDocuments(putusanRes.data); setPeraturanResults(peraturanRes.data);
     } catch (_) { /* keep previous data on failure */ }
@@ -140,7 +141,7 @@ const Home = () => {
     } catch (_) { /* ignore */ }
   };
   const applyDbPutusanFilter = (patch) => { const next = { ...filters, ...patch }; setFilters(next); loadDatabase(next); };
-  const goToDatabase = () => { setView("database"); setSearchOpen(false); setPeraturanOpen(false); loadPutusanFacets(); loadDatabase(); };
+  const goToDatabase = () => { setView("database"); setSearchOpen(false); setPeraturanOpen(false); setQuery(""); loadPutusanFacets(); loadDatabase(null, ""); };
   useEffect(() => { loadDocument(undefined, false); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     axios.get(`${API}/branding`).then((response) => setBranding((prev) => ({ ...prev, ...response.data }))).catch(() => {});

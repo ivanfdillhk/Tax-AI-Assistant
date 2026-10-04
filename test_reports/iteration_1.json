@@ -1,0 +1,38 @@
+{
+  "summary": "Frontend-only validation of Tax AI Assistant. Verified header + two tabs, Web search (returns real web results with titles+URLs), AI Search (returns ~2k char answer with 3 numbered citation sources), suggestion chip trigger, Tax Database seeded view (25 putusan, 9 peraturan), PDF upload (/api/putusan/upload) with metadata extraction producing a new putusan title (PUT-004812.14/2021/PP/M.IIIA Tahun 2023), file download of uploaded PDF via download-original-button, and Files modal listing 16 stored files. All critical flows pass end-to-end against the live preview URL.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Tax Knowledge -> Tax Database navigation",
+        "issue": "The shared `query` state is not cleared when switching from Tax Knowledge to Tax Database. If a user searched e.g. 'PMK 81 tahun 2024' on Knowledge and then clicks the Tax Database tab, Database loads with that stale query and shows 'Belum ada putusan/peraturan yang cocok' (0 results) even though 25 putusan + 9 peraturan are seeded. Clearing the search box or refreshing fixes it. goToDatabase() should reset query/filters.",
+        "affected_selectors": ["[data-testid=\"nav-tax-database\"]", "[data-testid=\"database-search-input\"]"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Tax Database putusan column",
+        "issues": ["Native <select> for 'Semua jenis sengketa' overlaps the putusan list items on open; while opened, clicking the top putusan rows is intercepted. Minor UX nuisance (not blocking because closing the select resolves it)."]
+      }
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "In App.js goToDatabase(), reset `query` (and optionally `filters`/`perFilter`) so navigating from Knowledge to Database starts fresh instead of inheriting the previous web-search query.",
+    "Consider replacing native <select>s on the Database page with shadcn Select so dropdowns don't overlap putusan rows."
+  ],
+  "critical_code_review_comments": [
+    "App.js is 625 lines in a single component — exceeds the 700-line soft cap for the file but the component itself is massive. Recommend splitting Home into KnowledgeView, DatabaseView, PutusanView, and modal subcomponents for maintainability.",
+    "Shared `query` state is reused across Knowledge web search, Database search, and in-document search strip. This causes cross-view contamination (see integration issue). Each view should have its own search state or goToX() should reset.",
+    "Several API calls (loadDocument, compareDocuments, sendQuestion, loadPeraturan, togglePeraturanStatus) have no error UI/toast — failures are swallowed silently, making diagnosis harder for end-users."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "n/a (skipped per request)", "frontend": "100% of requested flows" },
+  "test_credentials": "n/a (no auth)",
+  "seed_data_creation": "Uploaded /app/test_putusan_header.pdf via UI as a new putusan during testing (persisted; now visible in Files modal).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "All 6 requested frontend flows pass against preview URL. Only a minor UX issue remains: shared `query` state causes Database tab to appear empty after a Knowledge search. Backend-wise everything the frontend hits (/api/search, /api/ai-search, /api/putusan, /api/peraturan, /api/putusan/upload, /api/files, /api/files/{id}/download) returned healthy responses. Web search ~10-12s, AI search ~15-25s in practice.",
+  "rca of the issue": "N/A — no blocking bug."
+}
