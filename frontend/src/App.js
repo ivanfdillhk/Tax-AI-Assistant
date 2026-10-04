@@ -10,6 +10,26 @@ const fileInlineUrl = (fileId) => `${API}/files/${fileId}/download?inline=1`;
 const putusanPdfUrl = (id, inline = true) => `${API}/putusan/${id}/pdf${inline ? "?inline=1" : ""}`;
 const peraturanPdfUrl = (id, inline = true) => `${API}/peraturan/${id}/pdf${inline ? "?inline=1" : ""}`;
 
+const PdfFrame = ({ url, testId }) => {
+  const [blobUrl, setBlobUrl] = useState("");
+  const [status, setStatus] = useState("loading");
+  useEffect(() => {
+    let active = true; let created = "";
+    setStatus("loading"); setBlobUrl("");
+    axios.get(url, { responseType: "blob" })
+      .then((res) => {
+        if (!active) return;
+        created = URL.createObjectURL(new Blob([res.data], { type: "application/pdf" }));
+        setBlobUrl(created); setStatus("ready");
+      })
+      .catch(() => { if (active) setStatus("error"); });
+    return () => { active = false; if (created) URL.revokeObjectURL(created); };
+  }, [url]);
+  if (status === "loading") return <div className="pdf-loading" data-testid={`${testId}-loading`}>Memuat PDF…</div>;
+  if (status === "error") return <div className="pdf-error" data-testid={`${testId}-error`}>Gagal menampilkan PDF di dalam aplikasi. <a href={url} target="_blank" rel="noreferrer">Buka PDF di tab baru</a></div>;
+  return <iframe title="PDF" src={blobUrl} data-testid={testId} />;
+};
+
 const Home = () => {
   const [document, setDocument] = useState(null);
   const [documents, setDocuments] = useState([]);
@@ -525,7 +545,7 @@ const Home = () => {
         <div className="meta-grid" data-testid="document-metadata"><div><span>JENIS SENGKETA</span><strong>{document.case_type}</strong></div><div><span>JENIS PAJAK</span><strong>{document.tax_type}</strong></div><div><span>BADAN PERADILAN</span><strong>{document.court}</strong></div><div><span>MAJELIS</span><strong>{document.panel}</strong></div></div>
         <div className="reader-toolbar"><span className="reader-label"><span className="status-dot" /> Dokumen terverifikasi</span><div className="doc-tabs" data-testid="doc-tabs"><button className={`doc-tab ${docTab === "teks" ? "active" : ""}`} data-testid="doc-tab-teks" onClick={() => setDocTab("teks")}><BookOpen size={14} /> Teks terformat</button><button className={`doc-tab ${docTab === "pdf" ? "active" : ""}`} data-testid="doc-tab-pdf" onClick={() => setDocTab("pdf")}><FileText size={14} /> {document.file_id && isPdfFile(document.original_filename) ? "PDF Asli" : "PDF"}</button></div><button className="icon-button" data-testid="search-document-button" title="Cari putusan lain" onClick={openSearchQuick}><Search size={17} /></button></div>
         {docTab === "pdf"
-          ? <div className="pdf-viewer" data-testid="pdf-viewer"><iframe title="PDF putusan" src={document.file_id && isPdfFile(document.original_filename) ? fileInlineUrl(document.file_id) : putusanPdfUrl(document.id)} data-testid="pdf-frame" /></div>
+          ? <div className="pdf-viewer" data-testid="pdf-viewer"><PdfFrame url={document.file_id && isPdfFile(document.original_filename) ? fileInlineUrl(document.file_id) : putusanPdfUrl(document.id)} testId="pdf-frame" /></div>
           : <article className="document-body" data-testid="document-body">{renderBodyWithTables(document.body, { withParagraphIds: true })}</article>}
         <footer className="source-footer"><span>Sumber dokumen</span><a data-testid="source-link" href={document.source_url} target="_blank" rel="noreferrer">Sumber publik <ArrowUpRight size={14} /></a></footer>
       </section>
@@ -586,7 +606,7 @@ const Home = () => {
           <div className="peraturan-head"><div className="peraturan-head-top"><span className={`tag tag-${peraturanActive.jenis.toLowerCase().replace("-", "")}`}>{peraturanActive.jenis}</span><span className={`status-badge status-${peraturanActive.status.toLowerCase()}`} data-testid="peraturan-status-badge">{peraturanActive.status === "Berlaku" ? "✓ Berlaku" : peraturanActive.status === "Dicabut" ? "✕ Dicabut" : peraturanActive.status}</span><button className="outline-button status-toggle" data-testid="peraturan-status-toggle" onClick={togglePeraturanStatus}>{peraturanActive.status === "Berlaku" ? "Tandai dicabut" : "Tandai berlaku"}</button><button className="outline-button" data-testid="peraturan-download-pdf" onClick={() => window.open(peraturanPdfUrl(peraturanActive.id, false), "_blank")}><Download size={15} /> Unduh PDF</button></div><h3 data-testid="peraturan-title">{peraturanActive.judul}</h3><div className="peraturan-meta"><span>Nomor</span><strong>{peraturanActive.nomor}</strong><span>Tahun</span><strong>{peraturanActive.tahun}</strong><span>Status</span><strong>{peraturanActive.status}</strong>{peraturanActive.tanggal_berlaku && <><span>Berlaku</span><strong>{peraturanActive.tanggal_berlaku}</strong></>}{peraturanActive.dicabut_oleh && <><span>Dicabut oleh</span><strong>{peraturanActive.dicabut_oleh}</strong></>}</div>{peraturanActive.status !== "Berlaku" && <div className="status-warning" data-testid="peraturan-status-warning">Peraturan ini sudah tidak berlaku dan dikecualikan dari dasar jawaban AI.</div>}</div>
           <div className="doc-tabs doc-tabs-modal" data-testid="per-doc-tabs"><button className={`doc-tab ${perDocTab === "teks" ? "active" : ""}`} data-testid="per-doc-tab-teks" onClick={() => setPerDocTab("teks")}><BookOpen size={14} /> Teks</button><button className={`doc-tab ${perDocTab === "pdf" ? "active" : ""}`} data-testid="per-doc-tab-pdf" onClick={() => setPerDocTab("pdf")}><FileText size={14} /> {peraturanActive.file_id && isPdfFile(peraturanActive.original_filename) ? "PDF Asli" : "PDF"}</button></div>
           {perDocTab === "pdf"
-            ? <div className="pdf-viewer pdf-viewer-modal" data-testid="per-pdf-viewer"><iframe title="PDF peraturan" src={peraturanActive.file_id && isPdfFile(peraturanActive.original_filename) ? fileInlineUrl(peraturanActive.file_id) : peraturanPdfUrl(peraturanActive.id)} data-testid="per-pdf-frame" /></div>
+            ? <div className="pdf-viewer pdf-viewer-modal" data-testid="per-pdf-viewer"><PdfFrame url={peraturanActive.file_id && isPdfFile(peraturanActive.original_filename) ? fileInlineUrl(peraturanActive.file_id) : peraturanPdfUrl(peraturanActive.id)} testId="per-pdf-frame" /></div>
             : <article className="peraturan-body" data-testid="peraturan-body">{renderBodyWithTables(peraturanActive.body)}</article>}
           <div className="peraturan-related" data-testid="peraturan-related">
             <h4><Gavel size={14} /> Yurisprudensi — Putusan yang merujuk {peraturanActive.jenis} {peraturanActive.nomor}</h4>

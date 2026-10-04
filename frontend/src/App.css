@@ -153,4 +153,7 @@
 .pdf-viewer iframe { width:100%; height:78vh; border:0; display:block; }
 .pdf-viewer-modal { margin-top:4px; }
 .pdf-viewer-modal iframe { height:62vh; }
+.pdf-loading, .pdf-error { display:flex; align-items:center; justify-content:center; gap:6px; width:100%; height:78vh; color:#e2e8f0; font-size:14px; text-align:center; padding:24px; }
+.pdf-viewer-modal .pdf-loading, .pdf-viewer-modal .pdf-error { height:62vh; }
+.pdf-error a { color:#93c5fd; text-decoration:underline; }
 @media (max-width:560px) { .pdf-viewer iframe { height:70vh; } .doc-tabs { margin-left:0; } .reader-toolbar { flex-wrap:wrap; gap:10px; } }
