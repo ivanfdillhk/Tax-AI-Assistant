@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import "@/App.css";
 import { BrowserRouter } from "react-router-dom";
 import axios from "axios";
-import { ArrowUpRight, BookOpen, BrainCircuit, Cloud, ChevronLeft, Download, FileText, FileUp, FolderOpen, Gavel, ImagePlus, Link2, Scale, Search, Send, Settings, Sparkles, Trash2, X, GitCompareArrows } from "lucide-react";
+import { ArrowUpRight, BookOpen, BrainCircuit, Cloud, ChevronLeft, Download, Eye, FileText, FileUp, FolderOpen, Gavel, ImagePlus, Link2, Scale, Search, Send, Settings, Sparkles, Trash2, X, GitCompareArrows } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 const isPdfFile = (name) => (name || "").toLowerCase().endsWith(".pdf");
@@ -40,6 +40,7 @@ const Home = () => {
   const [putusanFacets, setPutusanFacets] = useState({ years: [], caseTypes: [] });
   const [docTab, setDocTab] = useState("teks");
   const [perDocTab, setPerDocTab] = useState("teks");
+  const [previewPdf, setPreviewPdf] = useState(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState([{ role: "assistant", text: "Saya siap membantu membaca putusan ini. Tanyakan dasar pertimbangan, isu PPN, atau amar putusannya.", citations: [] }]);
@@ -517,20 +518,26 @@ const Home = () => {
           </div>
           <div className="database-list">
             {documents.length === 0 ? <div className="result-empty">Belum ada putusan yang cocok.</div> :
-              documents.map((item) => <button className="database-item" data-testid={`database-putusan-${item.id}`} key={item.id} onClick={() => loadDocument(item.id)}>
-                <strong>{item.title}</strong>
-                <span className="database-item-meta">{item.tax_type} · {item.year} · {item.case_type}</span>
-              </button>)}
+              documents.map((item) => <div className="database-item-row" key={item.id}>
+                <button className="database-item" data-testid={`database-putusan-${item.id}`} onClick={() => loadDocument(item.id)}>
+                  <strong>{item.title}</strong>
+                  <span className="database-item-meta">{item.tax_type} · {item.year} · {item.case_type}</span>
+                </button>
+                <button className="preview-pdf-btn" data-testid={`preview-putusan-${item.id}`} title="Pratinjau PDF" onClick={() => setPreviewPdf({ url: putusanPdfUrl(item.id), title: item.title, downloadUrl: putusanPdfUrl(item.id, false) })}><Eye size={16} /></button>
+              </div>)}
           </div>
         </section>
         <section className="database-col" data-testid="database-col-peraturan">
           <div className="database-col-head"><Scale size={16} /><h2>Peraturan</h2><span className="database-count">{peraturanResults.length}</span></div>
           <div className="database-list">
             {peraturanResults.length === 0 ? <div className="result-empty">Belum ada peraturan yang cocok.</div> :
-              peraturanResults.map((reg) => <button className="database-item database-item-peraturan" data-testid={`database-peraturan-${reg.id}`} key={reg.id} onClick={() => openPeraturanById(reg.id)}>
-                <strong><span className={`tag tag-${reg.jenis.toLowerCase().replace("-", "")}`}>{reg.jenis}</span> {reg.nomor} — {reg.judul}</strong>
-                <span className="database-item-meta">{reg.tahun} · {reg.status}</span>
-              </button>)}
+              peraturanResults.map((reg) => <div className="database-item-row" key={reg.id}>
+                <button className="database-item database-item-peraturan" data-testid={`database-peraturan-${reg.id}`} onClick={() => openPeraturanById(reg.id)}>
+                  <strong><span className={`tag tag-${reg.jenis.toLowerCase().replace("-", "")}`}>{reg.jenis}</span> {reg.nomor} — {reg.judul}</strong>
+                  <span className="database-item-meta">{reg.tahun} · {reg.status}</span>
+                </button>
+                <button className="preview-pdf-btn" data-testid={`preview-peraturan-${reg.id}`} title="Pratinjau PDF" onClick={() => setPreviewPdf({ url: peraturanPdfUrl(reg.id), title: `${reg.jenis} ${reg.nomor}`, downloadUrl: peraturanPdfUrl(reg.id, false) })}><Eye size={16} /></button>
+              </div>)}
           </div>
         </section>
       </div>
@@ -639,6 +646,11 @@ const Home = () => {
           </div>)}
       </div>
     </div></div>}
+    {previewPdf && <div className="modal-backdrop" data-testid="pdf-preview-modal" onClick={() => setPreviewPdf(null)}><div className="pdf-preview-dialog" onClick={(e) => e.stopPropagation()}>
+      <div className="modal-head"><div><span className="eyebrow">PRATINJAU CEPAT</span><h2 data-testid="pdf-preview-title">{previewPdf.title}</h2></div><div className="pdf-preview-actions"><button className="outline-button" data-testid="pdf-preview-download" onClick={() => window.open(previewPdf.downloadUrl, "_blank")}><Download size={15} /> Unduh PDF</button><button className="icon-button" data-testid="pdf-preview-close" onClick={() => setPreviewPdf(null)}><X size={17} /></button></div></div>
+      <div className="pdf-viewer pdf-viewer-modal" data-testid="pdf-preview-viewer"><PdfFrame url={previewPdf.url} testId="pdf-preview-frame" /></div>
+    </div></div>}
+
     {toastMsg && <div className="toast" data-testid="toast-message">{toastMsg}</div>}
   </div>;
 };
