@@ -1,0 +1,23 @@
+{
+  "summary": "Frontend-only validation of PDF-blocked bug fix. Tested PDF rendering for peraturan + putusan via Katalog Peraturan and Tax Database list, for both uploaded-original files and text-generated PDFs, plus the two Unduh PDF download buttons. All 4 PDF rendering scenarios + 2 download scenarios pass. iframe src is a blob: URL in every case, no error fallback appears, and all /api/peraturan/{id}/pdf, /api/putusan/{id}/pdf and /api/files/{id}/download requests return 200 with no net::ERR_ABORTED. Bug 'mengapa saat menampilkan pdf diblokir' is FIXED.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "PdfFrame fetches the PDF via axios responseType:'blob' and converts to blob: URL — this correctly sidesteps the preview proxy aborting direct iframe requests. Good fix.",
+    "Consider revoking the blob URL (URL.revokeObjectURL) in the PdfFrame cleanup effect to avoid memory leaks when users open many documents in a session."
+  ],
+  "updated_files": [],
+  "success_rate": { "backend": "n/a (skipped per request)", "frontend": "100% (6/6 scenarios: peraturan uploaded, peraturan text-gen uu-7-2021, putusan uploaded, putusan text-gen put-pph21-2023, putusan Unduh PDF download, peraturan Unduh PDF download)" },
+  "test_credentials": "n/a (no auth)",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "PDF viewer uses blob: URLs via PdfFrame (App.js ~line 13). Correct testids: per-doc-tab-pdf (peraturan tab), doc-tab-pdf (putusan tab), per-pdf-frame/per-pdf-frame-error, pdf-frame/pdf-frame-error, download-pdf-button, peraturan-download-pdf, database-open-peraturan-catalog, peraturan-item-{id}, database-putusan-{id}, database-peraturan-{id}. All endpoints verified: GET /api/peraturan/{id}/pdf?inline=1 -> 200, GET /api/putusan/{id}/pdf?inline=1 -> 200, GET /api/files/{id}/download?inline=1 -> 200. Headless Chromium renders the PDF plugin area as a grey rectangle on success — that is expected, not a failure.",
+  "rca of the issue": "Original bug: PdfFrame earlier set <iframe src={backendUrl}> directly, and the preview proxy aborted the embedded cross-origin PDF request (net::ERR_ABORTED), so the iframe appeared blocked. Fix (now live): fetch the PDF via axios with responseType:'blob', wrap in URL.createObjectURL and use the resulting blob: URL as the iframe src. Verified: every PDF tab now produces src starting with 'blob:https://...', network requests complete 200, and the *-frame-error fallback never appears."
+}
