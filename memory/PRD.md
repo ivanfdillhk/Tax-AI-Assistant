@@ -42,3 +42,11 @@ Import the `Tax-AI-Assistant` repo (FastAPI + MongoDB + React) from GitHub into 
 ## Update (2026-10) — chat formatting
 - AI assistant answers previously showed raw markdown `**bold**` as literal asterisks. Added `renderRich()` in `App.js` that renders `**bold**` as <strong>, strips stray `*` / backticks / leading `#`, and preserves line breaks. Verified visually: no visible asterisks, citations ([P4] etc.) intact.
 
+## Update (2026-10) — 4 enhancements
+1. **Teks lengkap dari sumber**: new `POST /api/peraturan/{id}/refetch` re-fetches full text from the peraturan's `source_url` (shared `_fetch_document_from_url`: lxml HTML + follow PDF link) and updates body + original file. Frontend button "Ambil teks lengkap dari sumber" in peraturan detail. NOTE: peraturan.go.id blocks server-side fetch (502, Cloudflare/JS) — works for direct PDF / JDIH-download URLs and uploads; peraturan.go.id itself is not server-fetchable.
+2. **List rapi**: `renderRich()` now renders numbered/bulleted lines as real `<ol>/<ul>`, paragraphs otherwise; message wrapper changed `<p>`→`<div class=msg-body>`.
+3. **Salin jawaban**: copy button per assistant message (`copyAnswer` → clipboard, strips `**`).
+4. **Bersihkan data contoh**: `DELETE /api/peraturan/{id}` & `DELETE /api/putusan/{id}` with `db.seed_deletions` tombstones so deleted samples don't re-seed; trash buttons on catalog list items, peraturan detail, and both Database-page columns.
+- `import_public_url` refactored to use shared `_fetch_document_from_url` (behavior unchanged). Backend tested: 10/10 passed.
+
+

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import "@/App.css";
 import { BrowserRouter } from "react-router-dom";
 import axios from "axios";
-import { ArrowUpRight, BookOpen, BrainCircuit, Cloud, ChevronLeft, Download, Eye, FileText, FileUp, FolderOpen, Gavel, ImagePlus, Link2, Scale, Search, Send, Settings, Sparkles, Trash2, X, GitCompareArrows } from "lucide-react";
+import { ArrowUpRight, BookOpen, BrainCircuit, Cloud, ChevronLeft, Copy, Download, Eye, FileText, FileUp, FolderOpen, Gavel, ImagePlus, Link2, RefreshCw, Scale, Search, Send, Settings, Sparkles, Trash2, X, GitCompareArrows } from "lucide-react";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 const isPdfFile = (name) => (name || "").toLowerCase().endsWith(".pdf");
@@ -22,21 +22,45 @@ const peraturanPdfTabUrl = (doc) =>
   : looksLikePdfUrl(doc.source_url) ? pdfProxyUrl(doc.source_url)
   : peraturanPdfUrl(doc.id);
 
-// Render assistant text: show **bold** as bold (no visible asterisks), drop stray
-// markdown markers (*, `, leading #), and keep line breaks.
+// Render assistant text: **bold** -> <strong> (no visible asterisks), numbered/bulleted
+// lines -> proper <ol>/<ul> lists, other lines -> paragraphs; strips stray markdown markers.
+const parseInline = (str, kp) => {
+  const segs = str.split(/(\*\*[^*]+\*\*)/g).filter((s) => s !== "");
+  return segs.map((seg, i) =>
+    seg.startsWith("**") && seg.endsWith("**")
+      ? <strong key={`${kp}-b${i}`}>{seg.slice(2, -2)}</strong>
+      : <span key={`${kp}-s${i}`}>{seg.replace(/\*/g, "")}</span>
+  );
+};
 const renderRich = (text) => {
   const clean = (text || "").replace(/`+/g, "").replace(/^\s{0,3}#{1,6}\s*/gm, "");
   const lines = clean.split("\n");
-  return lines.map((line, li) => {
-    const segs = line.split(/(\*\*[^*]+\*\*)/g).filter((s) => s !== "");
-    const nodes = segs.map((seg, si) =>
-      seg.startsWith("**") && seg.endsWith("**")
-        ? <strong key={si}>{seg.slice(2, -2)}</strong>
-        : <span key={si}>{seg.replace(/\*/g, "")}</span>
-    );
-    return <span className="msg-line" key={li}>{nodes}{li < lines.length - 1 ? <br /> : null}</span>;
+  const blocks = [];
+  let list = null;
+  const flush = () => { if (list) { blocks.push(list); list = null; } };
+  lines.forEach((raw) => {
+    const line = raw.trimEnd();
+    const om = line.match(/^\s*(\d+)[.)]\s+(.*)$/);
+    const um = line.match(/^\s*[-*•·]\s+(.*)$/);
+    if (om) {
+      if (!list || list.type !== "ol") { flush(); list = { type: "ol", items: [] }; }
+      list.items.push(om[2]);
+    } else if (um) {
+      if (!list || list.type !== "ul") { flush(); list = { type: "ul", items: [] }; }
+      list.items.push(um[1]);
+    } else {
+      flush();
+      if (line.trim()) blocks.push({ type: "p", text: line });
+    }
+  });
+  flush();
+  return blocks.map((b, bi) => {
+    if (b.type === "ol") return <ol className="msg-list msg-ol" key={bi}>{b.items.map((it, ii) => <li key={ii}>{parseInline(it, `${bi}-${ii}`)}</li>)}</ol>;
+    if (b.type === "ul") return <ul className="msg-list msg-ul" key={bi}>{b.items.map((it, ii) => <li key={ii}>{parseInline(it, `${bi}-${ii}`)}</li>)}</ul>;
+    return <p className="msg-para" key={bi}>{parseInline(b.text, bi)}</p>;
   });
 };
+const plainAnswer = (t) => (t || "").replace(/\*\*/g, "").replace(/`+/g, "");
 
 const PdfFrame = ({ url, testId }) => {
   const [blobUrl, setBlobUrl] = useState("");
@@ -77,6 +101,7 @@ const Home = () => {
   const [compareOpen, setCompareOpen] = useState(false);
   const [compareId, setCompareId] = useState("");
   const [compareFirstId, setCompareFirstId] = useState("");
+  const [enrichingId, setEnrichingId] = useState("");
   const [comparison, setComparison] = useState(null);
   const [importStatus, setImportStatus] = useState("");
   const [urlOpen, setUrlOpen] = useState(false);
@@ -253,6 +278,43 @@ const Home = () => {
     setCompareId("");
     if (!documents.length) searchDocuments();
     setCompareOpen(true);
+  };
+  const copyAnswer = async (text) => {
+    try { await navigator.clipboard.writeText(plainAnswer(text)); showToast("Jawaban disalin"); }
+    catch { showToast("Gagal menyalin jawaban"); }
+  };
+  const enrichPeraturan = async () => {
+    if (!peraturanActive?.id) return;
+    setEnrichingId(peraturanActive.id);
+    setPeraturanStatus("Mengambil teks lengkap dari sumber…");
+    try {
+      const res = await axios.post(`${API}/peraturan/${peraturanActive.id}/refetch`);
+      setPeraturanActive(res.data);
+      setPeraturanList((list) => list.map((it) => it.id === res.data.id ? res.data : it));
+      setPeraturanStatus("Teks lengkap berhasil diambil dari sumber.");
+    } catch (error) {
+      setPeraturanStatus(error.response?.data?.detail || "Gagal mengambil teks lengkap dari sumber.");
+    } finally { setEnrichingId(""); }
+  };
+  const deletePeraturan = async (id, event) => {
+    if (event) event.stopPropagation();
+    if (!window.confirm("Hapus peraturan ini dari database?")) return;
+    try {
+      await axios.delete(`${API}/peraturan/${id}`);
+      setPeraturanList((list) => list.filter((it) => it.id !== id));
+      setPeraturanResults((list) => list.filter((it) => it.id !== id));
+      if (peraturanActive?.id === id) setPeraturanActive(null);
+      showToast("Peraturan dihapus");
+    } catch { showToast("Gagal menghapus peraturan"); }
+  };
+  const deletePutusan = async (id, event) => {
+    if (event) event.stopPropagation();
+    if (!window.confirm("Hapus putusan ini dari database?")) return;
+    try {
+      await axios.delete(`${API}/putusan/${id}`);
+      setDocuments((list) => list.filter((it) => it.id !== id));
+      showToast("Putusan dihapus");
+    } catch { showToast("Gagal menghapus putusan"); }
   };
 
   const loadPeraturan = async () => {
@@ -567,6 +629,7 @@ const Home = () => {
                   <span className="database-item-meta">{item.tax_type} · {item.year} · {item.case_type}</span>
                 </button>
                 <button className="preview-pdf-btn" data-testid={`preview-putusan-${item.id}`} title="Pratinjau PDF" onClick={() => setPreviewPdf({ url: putusanPdfUrl(item.id), title: item.title, downloadUrl: putusanPdfUrl(item.id, false) })}><Eye size={16} /></button>
+                <button className="preview-pdf-btn db-delete-btn" data-testid={`delete-putusan-${item.id}`} title="Hapus putusan" onClick={(event) => deletePutusan(item.id, event)}><Trash2 size={16} /></button>
               </div>)}
           </div>
         </section>
@@ -580,6 +643,7 @@ const Home = () => {
                   <span className="database-item-meta">{reg.tahun} · {reg.status}</span>
                 </button>
                 <button className="preview-pdf-btn" data-testid={`preview-peraturan-${reg.id}`} title="Pratinjau PDF" onClick={() => setPreviewPdf({ url: peraturanPdfUrl(reg.id), title: `${reg.jenis} ${reg.nomor}`, downloadUrl: peraturanPdfUrl(reg.id, false) })}><Eye size={16} /></button>
+                <button className="preview-pdf-btn db-delete-btn" data-testid={`delete-peraturan-${reg.id}`} title="Hapus peraturan" onClick={(event) => deletePeraturan(reg.id, event)}><Trash2 size={16} /></button>
               </div>)}
           </div>
         </section>
@@ -634,7 +698,7 @@ const Home = () => {
           : <article className="document-body" data-testid="document-body">{renderBodyWithTables(document.body, { withParagraphIds: true })}</article>}
         <footer className="source-footer"><span>Sumber dokumen</span><a data-testid="source-link" href={document.source_url} target="_blank" rel="noreferrer">Sumber publik <ArrowUpRight size={14} /></a></footer>
       </section>
-      <aside className={`assistant-panel ${mobileChat ? "panel-open" : ""}`} data-testid="assistant-panel"><div className="assistant-head"><div><div className="assistant-kicker"><span className="live-dot" /> AI CONTEXTUAL ASSISTANT</div><h2>Tanya putusan ini</h2><p>Jawaban berbasis dokumen aktif</p></div><button className="icon-button close-chat" data-testid="close-chat-button" onClick={() => setMobileChat(false)}><X size={18} /></button></div><div className="model-chip" data-testid="model-indicator"><Sparkles size={14} /> GPT 5.6 Terra <span>•</span> grounded</div><div className="chat-messages" data-testid="chat-messages">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><span className="message-label">{message.role === "assistant" ? "TaxLens AI" : "Anda"}</span><p>{message.text ? renderRich(message.text) : (loading ? "Membaca pertimbangan majelis…" : "")}</p>{message.citations?.length > 0 && <><div className="citation-list" data-testid="citation-list">{message.citations.map((citation) => <button className={`citation-chip citation-${citation.kind || "paragraf"}`} data-testid={`citation-${citation.id}`} key={citation.id} onClick={() => handleCitationClick(citation)}><span>{citation.label}</span> {citation.text}</button>)}</div><div className="export-row"><span className="export-label">UNDUH LAMPIRAN</span><button className="export-btn" data-testid={`export-pdf-${index}`} onClick={() => exportDasarHukum(message, messages[index - 1]?.text, "pdf")}><Download size={12} /> PDF</button><button className="export-btn" data-testid={`export-docx-${index}`} onClick={() => exportDasarHukum(message, messages[index - 1]?.text, "docx")}><Download size={12} /> DOCX</button><button className="export-btn export-btn-primary" data-testid={`export-bundel-${index}`} onClick={() => exportDasarHukum(message, messages[index - 1]?.text, "bundel")}><Download size={12} /> Bundel PDF</button><button className="export-btn export-btn-primary" data-testid={`export-bundel-docx-${index}`} onClick={() => exportDasarHukum(message, messages[index - 1]?.text, "bundel-docx")}><Download size={12} /> Bundel DOCX</button></div></>}</div>)}</div><div className="suggestions"><button data-testid="suggestion-summary" onClick={() => setQuestion("Apa inti pertimbangan majelis dalam putusan ini?")}>Ringkas pertimbangan</button><button data-testid="suggestion-issue" onClick={() => setQuestion("Apa isu PPN yang diputus?")}>Identifikasi isu PPN</button></div><form className="chat-form" onSubmit={sendQuestion}><textarea value={question} onChange={(event) => setQuestion(event.target.value)} data-testid="chat-question-input" placeholder="Tanyakan sesuatu tentang putusan…" rows="2" /><button className="send-button" data-testid="chat-send-button" disabled={loading || !question.trim()}><Send size={17} /></button></form><div className="assistant-note"><span>⌘</span> Jawaban AI perlu diverifikasi terhadap dokumen asli</div></aside>
+      <aside className={`assistant-panel ${mobileChat ? "panel-open" : ""}`} data-testid="assistant-panel"><div className="assistant-head"><div><div className="assistant-kicker"><span className="live-dot" /> AI CONTEXTUAL ASSISTANT</div><h2>Tanya putusan ini</h2><p>Jawaban berbasis dokumen aktif</p></div><button className="icon-button close-chat" data-testid="close-chat-button" onClick={() => setMobileChat(false)}><X size={18} /></button></div><div className="model-chip" data-testid="model-indicator"><Sparkles size={14} /> GPT 5.6 Terra <span>•</span> grounded</div><div className="chat-messages" data-testid="chat-messages">{messages.map((message, index) => <div className={`message ${message.role}`} key={index}><div className="message-top"><span className="message-label">{message.role === "assistant" ? "TaxLens AI" : "Anda"}</span>{message.role === "assistant" && message.text && <button className="copy-answer-btn" data-testid={`copy-answer-${index}`} title="Salin jawaban" onClick={() => copyAnswer(message.text)}><Copy size={13} /> Salin</button>}</div><div className="msg-body">{message.text ? renderRich(message.text) : (loading ? "Membaca pertimbangan majelis…" : "")}</div>{message.citations?.length > 0 && <><div className="citation-list" data-testid="citation-list">{message.citations.map((citation) => <button className={`citation-chip citation-${citation.kind || "paragraf"}`} data-testid={`citation-${citation.id}`} key={citation.id} onClick={() => handleCitationClick(citation)}><span>{citation.label}</span> {citation.text}</button>)}</div><div className="export-row"><span className="export-label">UNDUH LAMPIRAN</span><button className="export-btn" data-testid={`export-pdf-${index}`} onClick={() => exportDasarHukum(message, messages[index - 1]?.text, "pdf")}><Download size={12} /> PDF</button><button className="export-btn" data-testid={`export-docx-${index}`} onClick={() => exportDasarHukum(message, messages[index - 1]?.text, "docx")}><Download size={12} /> DOCX</button><button className="export-btn export-btn-primary" data-testid={`export-bundel-${index}`} onClick={() => exportDasarHukum(message, messages[index - 1]?.text, "bundel")}><Download size={12} /> Bundel PDF</button><button className="export-btn export-btn-primary" data-testid={`export-bundel-docx-${index}`} onClick={() => exportDasarHukum(message, messages[index - 1]?.text, "bundel-docx")}><Download size={12} /> Bundel DOCX</button></div></>}</div>)}</div><div className="suggestions"><button data-testid="suggestion-summary" onClick={() => setQuestion("Apa inti pertimbangan majelis dalam putusan ini?")}>Ringkas pertimbangan</button><button data-testid="suggestion-issue" onClick={() => setQuestion("Apa isu PPN yang diputus?")}>Identifikasi isu PPN</button></div><form className="chat-form" onSubmit={sendQuestion}><textarea value={question} onChange={(event) => setQuestion(event.target.value)} data-testid="chat-question-input" placeholder="Tanyakan sesuatu tentang putusan…" rows="2" /><button className="send-button" data-testid="chat-send-button" disabled={loading || !question.trim()}><Send size={17} /></button></form><div className="assistant-note"><span>⌘</span> Jawaban AI perlu diverifikasi terhadap dokumen asli</div></aside>
     </main>}
     {compareOpen && <div className="modal-backdrop" data-testid="compare-modal"><div className="compare-modal"><div className="modal-head"><div><span className="eyebrow">ANALISIS BERDAMPINGAN</span><h2>Bandingkan putusan</h2></div><button className="icon-button" data-testid="compare-close-button" onClick={() => setCompareOpen(false)}><X size={17} /></button></div><p className="modal-copy">Pilih dua putusan untuk melihat perbandingan metadata, amar, dan pertimbangan hukum secara berdampingan.</p><button className="outline-button compare-load" data-testid="compare-search-button" onClick={searchDocuments}><Search size={15} /> Muat hasil pencarian</button><label className="compare-field-label">Putusan pertama</label><select data-testid="compare-first-select" value={compareFirstId} onChange={(event) => setCompareFirstId(event.target.value)}><option value="">Pilih putusan pertama</option>{documents.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select><label className="compare-field-label">Putusan kedua (pembanding)</label><select data-testid="compare-document-select" value={compareId} onChange={(event) => setCompareId(event.target.value)}><option value="">Pilih putusan kedua</option>{documents.filter((item) => item.id !== compareFirstId).map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select>{compareFirstId && compareId && compareFirstId === compareId && <div className="difference-note">Pilih dua putusan yang berbeda.</div>}<button className="primary-button compare-submit" data-testid="compare-submit-button" disabled={!compareFirstId || !compareId || compareFirstId === compareId} onClick={compareDocuments}><GitCompareArrows size={15} /> Bandingkan sekarang</button></div></div>}
     {brandingOpen && <div className="modal-backdrop" data-testid="branding-modal"><div className="branding-modal"><div className="modal-head"><div><span className="eyebrow">BRANDING FIRMA</span><h2>Logo & Letterhead</h2></div><button className="icon-button" data-testid="branding-close-button" onClick={() => setBrandingOpen(false)}><X size={17} /></button></div><p className="modal-copy">Logo dan nama firma ini akan tercetak otomatis di setiap ekspor PDF, DOCX, dan Bundel Penelitian — langsung siap diserahkan ke klien.</p>      <div className="branding-split">
@@ -686,9 +750,9 @@ const Home = () => {
         <button className="outline-button" data-testid="peraturan-apply-filter" onClick={loadPeraturan}>Terapkan</button>
       </div>
       <div className="peraturan-split">
-        <div className="peraturan-list" data-testid="peraturan-list">{peraturanList.length === 0 && <div className="peraturan-empty">Belum ada peraturan. Tekan Terapkan atau impor sumber baru.</div>}{peraturanList.map((reg) => <button key={reg.id} className={`peraturan-item ${peraturanActive?.id === reg.id ? "active" : ""} ${reg.status !== "Berlaku" ? "revoked" : ""}`} data-testid={`peraturan-item-${reg.id}`} onClick={() => setPeraturanActive(reg)}><div className="peraturan-item-top"><span className={`tag tag-${reg.jenis.toLowerCase().replace("-", "")}`}>{reg.jenis}</span><span className={`status-dot-badge status-${reg.status.toLowerCase()}`} title={reg.status}>{reg.status === "Berlaku" ? "✓" : "✕"}</span></div><strong>{reg.nomor}</strong><p>{reg.judul}</p><small>{reg.tahun} · {reg.status}</small></button>)}</div>
+        <div className="peraturan-list" data-testid="peraturan-list">{peraturanList.length === 0 && <div className="peraturan-empty">Belum ada peraturan. Tekan Terapkan atau impor sumber baru.</div>}{peraturanList.map((reg) => <div className={`peraturan-item-row ${peraturanActive?.id === reg.id ? "active" : ""} ${reg.status !== "Berlaku" ? "revoked" : ""}`} key={reg.id}><button className={`peraturan-item ${peraturanActive?.id === reg.id ? "active" : ""} ${reg.status !== "Berlaku" ? "revoked" : ""}`} data-testid={`peraturan-item-${reg.id}`} onClick={() => setPeraturanActive(reg)}><div className="peraturan-item-top"><span className={`tag tag-${reg.jenis.toLowerCase().replace("-", "")}`}>{reg.jenis}</span><span className={`status-dot-badge status-${reg.status.toLowerCase()}`} title={reg.status}>{reg.status === "Berlaku" ? "✓" : "✕"}</span></div><strong>{reg.nomor}</strong><p>{reg.judul}</p><small>{reg.tahun} · {reg.status}</small></button><button className="peraturan-item-delete" data-testid={`peraturan-delete-${reg.id}`} title="Hapus peraturan" onClick={(event) => deletePeraturan(reg.id, event)}><Trash2 size={14} /></button></div>)}</div>
         <div className="peraturan-detail" data-testid="peraturan-detail">{peraturanActive ? <>
-          <div className="peraturan-head"><div className="peraturan-head-top"><span className={`tag tag-${peraturanActive.jenis.toLowerCase().replace("-", "")}`}>{peraturanActive.jenis}</span><span className={`status-badge status-${peraturanActive.status.toLowerCase()}`} data-testid="peraturan-status-badge">{peraturanActive.status === "Berlaku" ? "✓ Berlaku" : peraturanActive.status === "Dicabut" ? "✕ Dicabut" : peraturanActive.status}</span><button className="outline-button status-toggle" data-testid="peraturan-status-toggle" onClick={togglePeraturanStatus}>{peraturanActive.status === "Berlaku" ? "Tandai dicabut" : "Tandai berlaku"}</button><button className="outline-button" data-testid="peraturan-download-pdf" onClick={() => window.open(peraturanPdfUrl(peraturanActive.id, false), "_blank")}><Download size={15} /> Unduh PDF</button></div><h3 data-testid="peraturan-title">{peraturanActive.judul}</h3><div className="peraturan-meta"><span>Nomor</span><strong>{peraturanActive.nomor}</strong><span>Tahun</span><strong>{peraturanActive.tahun}</strong><span>Status</span><strong>{peraturanActive.status}</strong>{peraturanActive.tanggal_berlaku && <><span>Berlaku</span><strong>{peraturanActive.tanggal_berlaku}</strong></>}{peraturanActive.dicabut_oleh && <><span>Dicabut oleh</span><strong>{peraturanActive.dicabut_oleh}</strong></>}</div>{peraturanActive.status !== "Berlaku" && <div className="status-warning" data-testid="peraturan-status-warning">Peraturan ini sudah tidak berlaku dan dikecualikan dari dasar jawaban AI.</div>}</div>
+          <div className="peraturan-head"><div className="peraturan-head-top"><span className={`tag tag-${peraturanActive.jenis.toLowerCase().replace("-", "")}`}>{peraturanActive.jenis}</span><span className={`status-badge status-${peraturanActive.status.toLowerCase()}`} data-testid="peraturan-status-badge">{peraturanActive.status === "Berlaku" ? "✓ Berlaku" : peraturanActive.status === "Dicabut" ? "✕ Dicabut" : peraturanActive.status}</span><button className="outline-button status-toggle" data-testid="peraturan-status-toggle" onClick={togglePeraturanStatus}>{peraturanActive.status === "Berlaku" ? "Tandai dicabut" : "Tandai berlaku"}</button><button className="outline-button" data-testid="peraturan-download-pdf" onClick={() => window.open(peraturanPdfUrl(peraturanActive.id, false), "_blank")}><Download size={15} /> Unduh PDF</button>{peraturanActive.source_url && <button className="outline-button" data-testid="peraturan-refetch" disabled={enrichingId === peraturanActive.id} onClick={enrichPeraturan}><RefreshCw size={15} /> {enrichingId === peraturanActive.id ? "Mengambil…" : "Ambil teks lengkap dari sumber"}</button>}<button className="icon-button peraturan-delete-detail" data-testid="peraturan-delete-detail" title="Hapus peraturan" onClick={(event) => deletePeraturan(peraturanActive.id, event)}><Trash2 size={15} /></button></div><h3 data-testid="peraturan-title">{peraturanActive.judul}</h3><div className="peraturan-meta"><span>Nomor</span><strong>{peraturanActive.nomor}</strong><span>Tahun</span><strong>{peraturanActive.tahun}</strong><span>Status</span><strong>{peraturanActive.status}</strong>{peraturanActive.tanggal_berlaku && <><span>Berlaku</span><strong>{peraturanActive.tanggal_berlaku}</strong></>}{peraturanActive.dicabut_oleh && <><span>Dicabut oleh</span><strong>{peraturanActive.dicabut_oleh}</strong></>}</div>{peraturanActive.status !== "Berlaku" && <div className="status-warning" data-testid="peraturan-status-warning">Peraturan ini sudah tidak berlaku dan dikecualikan dari dasar jawaban AI.</div>}</div>
           <div className="doc-tabs doc-tabs-modal" data-testid="per-doc-tabs"><button className={`doc-tab ${perDocTab === "teks" ? "active" : ""}`} data-testid="per-doc-tab-teks" onClick={() => setPerDocTab("teks")}><BookOpen size={14} /> Teks</button><button className={`doc-tab ${perDocTab === "pdf" ? "active" : ""}`} data-testid="per-doc-tab-pdf" onClick={() => setPerDocTab("pdf")}><FileText size={14} /> {peraturanActive.file_id && isPdfFile(peraturanActive.original_filename) ? "PDF Asli" : "PDF"}</button></div>
           {perDocTab === "pdf"
             ? <div className="pdf-viewer pdf-viewer-modal" data-testid="per-pdf-viewer"><PdfFrame url={peraturanPdfTabUrl(peraturanActive)} testId="per-pdf-frame" /></div>

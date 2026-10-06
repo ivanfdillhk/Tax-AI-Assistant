@@ -287,7 +287,8 @@ async def get_putusan(document_id: str):
     if document:
         return document
     if document_id in {SAMPLE_PUTUSAN["id"], SAMPLE_PUTUSAN["slug"]}:
-        return SAMPLE_PUTUSAN
+        if not await db.seed_deletions.find_one({"kind": "putusan", "id": SAMPLE_PUTUSAN["id"]}):
+            return SAMPLE_PUTUSAN
     raise HTTPException(status_code=404, detail="Putusan tidak ditemukan")
 
 @api_router.get("/putusan")
@@ -303,7 +304,8 @@ async def list_putusan(q: Optional[str] = None, year: Optional[str] = None, tax_
     sample_text = " ".join(str(value) for value in SAMPLE_PUTUSAN.values())
     sample_matches = (not q or q.lower() in sample_text.lower()) and (not year_int or year_int == SAMPLE_PUTUSAN["year"]) and (not tax_type or tax_type.lower() == SAMPLE_PUTUSAN["tax_type"].lower()) and (not case_type or case_type.lower() == SAMPLE_PUTUSAN["case_type"].lower())
     if not documents and sample_matches:
-        documents = [SAMPLE_PUTUSAN]
+        if not await db.seed_deletions.find_one({"kind": "putusan", "id": SAMPLE_PUTUSAN["id"]}):
+            documents = [SAMPLE_PUTUSAN]
     return documents
 
 @api_router.get("/putusan/{document_id}/pdf")
@@ -324,6 +326,17 @@ async def compare_putusan(payload: CompareRequest):
     first = await get_putusan(payload.first_id)
     second = await get_putusan(payload.second_id)
     return {"first": first, "second": second, "differences": {"tax_type": first.get("tax_type") != second.get("tax_type"), "case_type": first.get("case_type") != second.get("case_type"), "verdict": first.get("verdict") != second.get("verdict")}}
+
+@api_router.delete("/putusan/{document_id}")
+async def delete_putusan(document_id: str):
+    sample_ids = {SAMPLE_PUTUSAN["id"], SAMPLE_PUTUSAN["slug"], *[p["id"] for p in EXTRA_SAMPLE_PUTUSAN]}
+    is_sample = document_id in sample_ids
+    result = await db.putusan.delete_one({"id": document_id})
+    if is_sample:
+        await db.seed_deletions.update_one({"kind": "putusan", "id": document_id}, {"$set": {"kind": "putusan", "id": document_id}}, upsert=True)
+    if result.deleted_count == 0 and not is_sample:
+        raise HTTPException(status_code=404, detail="Putusan tidak ditemukan")
+    return {"id": document_id, "deleted": True}
 
 @api_router.post("/putusan/upload")
 async def upload_putusan(file: UploadFile = File(...)):
@@ -349,54 +362,60 @@ async def upload_putusan(file: UploadFile = File(...)):
     document.pop("_id", None)
     return document
 
+def _fetch_document_from_url(url, kind):
+    """Fetch a URL and return (text, title, saved_file).
+    saved_file is (bytes, filename, content_type) when a real file was captured, else None.
+    Handles direct PDF/DOCX, and HTML pages (with lxml extraction + follow-PDF-link)."""
+    response = requests.get(url, timeout=20, headers={"User-Agent": "TaxLens/1.0"}, allow_redirects=True)
+    response.raise_for_status()
+    content_type = response.headers.get("Content-Type", "").lower()
+    url_lower = url.lower().split("?")[0]
+    saved_file = None
+    if "pdf" in content_type or url_lower.endswith(".pdf"):
+        text = _extract_pdf_structured(response.content)
+        fname = _external_filename(response, url)
+        if not fname.lower().endswith(".pdf"):
+            fname += ".pdf"
+        title = fname.rsplit(".", 1)[0]
+        saved_file = (response.content, fname, "application/pdf")
+    elif "wordprocessingml" in content_type or url_lower.endswith(".docx"):
+        text = "\n".join(paragraph.text for paragraph in DocxDocument(BytesIO(response.content)).paragraphs)
+        fname = _external_filename(response, url)
+        if not fname.lower().endswith(".docx"):
+            fname += ".docx"
+        title = fname.rsplit(".", 1)[0]
+        saved_file = (response.content, fname, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    else:
+        text = _extract_html_text(response.text)
+        title_match = re.search(r"<title>(.*?)</title>", response.text, re.I | re.S)
+        title = title_match.group(1).strip() if title_match else ("peraturan-publik" if kind == "peraturan" else "putusan-publik")
+        # JDIH / peraturan.go.id pages typically expose the FULL document only as a
+        # downloadable PDF. Follow that link to capture complete text + keep the file.
+        pdf_link = _find_pdf_url(response.text, getattr(response, "url", url))
+        if pdf_link:
+            try:
+                pr = requests.get(pdf_link, timeout=30, headers={"User-Agent": "TaxLens/1.0"}, allow_redirects=True)
+                pr.raise_for_status()
+                pr_ct = pr.headers.get("Content-Type", "").lower()
+                if "pdf" in pr_ct or pdf_link.lower().split("?")[0].endswith(".pdf"):
+                    pdf_text = _extract_pdf_structured(pr.content)
+                    if len(pdf_text.strip()) > len(text.strip()):
+                        text = pdf_text
+                        fname = _external_filename(pr, pdf_link)
+                        if not fname.lower().endswith(".pdf"):
+                            fname += ".pdf"
+                        title = fname.rsplit(".", 1)[0] if title in ("peraturan-publik", "putusan-publik") else title
+                        saved_file = (pr.content, fname, "application/pdf")
+            except Exception:
+                pass
+    return text, title, saved_file
+
 @api_router.post("/putusan/import-url")
 async def import_public_url(payload: UrlImportRequest):
     try:
-        response = requests.get(payload.url, timeout=20, headers={"User-Agent": "TaxLens/1.0"}, allow_redirects=True)
-        response.raise_for_status()
+        text, title, saved_file = _fetch_document_from_url(payload.url, payload.kind)
     except requests.RequestException as exc:
         raise HTTPException(status_code=400, detail=f"Sumber tidak dapat diakses: {exc}")
-    content_type = response.headers.get("Content-Type", "").lower()
-    url_lower = payload.url.lower().split("?")[0]
-    saved_file = None  # (bytes, filename, content_type) when a real file was fetched
-    try:
-        if "pdf" in content_type or url_lower.endswith(".pdf"):
-            text = _extract_pdf_structured(response.content)
-            fname = _external_filename(response, payload.url)
-            if not fname.lower().endswith(".pdf"):
-                fname += ".pdf"
-            title = fname.rsplit(".", 1)[0]
-            saved_file = (response.content, fname, "application/pdf")
-        elif "wordprocessingml" in content_type or url_lower.endswith(".docx"):
-            text = "\n".join(paragraph.text for paragraph in DocxDocument(BytesIO(response.content)).paragraphs)
-            fname = _external_filename(response, payload.url)
-            if not fname.lower().endswith(".docx"):
-                fname += ".docx"
-            title = fname.rsplit(".", 1)[0]
-            saved_file = (response.content, fname, "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-        else:
-            text = _extract_html_text(response.text)
-            title_match = re.search(r"<title>(.*?)</title>", response.text, re.I | re.S)
-            title = title_match.group(1).strip() if title_match else ("peraturan-publik" if payload.kind == "peraturan" else "putusan-publik")
-            # JDIH / peraturan.go.id pages typically expose the FULL document only as a
-            # downloadable PDF. Follow that link to capture complete text + keep the file.
-            pdf_link = _find_pdf_url(response.text, getattr(response, "url", payload.url))
-            if pdf_link:
-                try:
-                    pr = requests.get(pdf_link, timeout=30, headers={"User-Agent": "TaxLens/1.0"}, allow_redirects=True)
-                    pr.raise_for_status()
-                    pr_ct = pr.headers.get("Content-Type", "").lower()
-                    if "pdf" in pr_ct or pdf_link.lower().split("?")[0].endswith(".pdf"):
-                        pdf_text = _extract_pdf_structured(pr.content)
-                        if len(pdf_text.strip()) > len(text.strip()):
-                            text = pdf_text
-                            fname = _external_filename(pr, pdf_link)
-                            if not fname.lower().endswith(".pdf"):
-                                fname += ".pdf"
-                            title = fname.rsplit(".", 1)[0] if title in ("peraturan-publik", "putusan-publik") else title
-                            saved_file = (pr.content, fname, "application/pdf")
-                except Exception:
-                    pass
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Isi URL tidak dapat diproses: {exc}")
     if not text.strip():
@@ -719,6 +738,43 @@ async def get_peraturan(peraturan_id: str):
     if not doc:
         raise HTTPException(status_code=404, detail="Peraturan tidak ditemukan")
     return doc
+
+@api_router.post("/peraturan/{peraturan_id}/refetch")
+async def refetch_peraturan(peraturan_id: str):
+    """Re-fetch the full document text from the peraturan's existing source_url
+    (following a PDF link when present) and update the stored body + original file."""
+    record = await db.peraturan.find_one({"id": peraturan_id}, {"_id": 0})
+    if not record:
+        raise HTTPException(status_code=404, detail="Peraturan tidak ditemukan")
+    url = record.get("source_url")
+    if not url or not re.match(r"^https?://", url, re.I):
+        raise HTTPException(status_code=400, detail="Peraturan ini tidak memiliki URL sumber yang valid")
+    try:
+        text, _title, saved_file = _fetch_document_from_url(url, "peraturan")
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Sumber tidak dapat diakses: {exc}")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Isi sumber tidak dapat diproses: {exc}")
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Isi sumber kosong atau tidak terbaca")
+    update = {"body": text[:2000000]}
+    if saved_file:
+        file_record = await save_uploaded_file(saved_file[0], saved_file[1], saved_file[2], "peraturan", peraturan_id)
+        if file_record:
+            update["file_id"] = file_record["id"]
+            update["original_filename"] = file_record["original_filename"]
+    await db.peraturan.update_one({"id": peraturan_id}, {"$set": update})
+    return await db.peraturan.find_one({"id": peraturan_id}, {"_id": 0})
+
+@api_router.delete("/peraturan/{peraturan_id}")
+async def delete_peraturan(peraturan_id: str):
+    is_sample = any(r["id"] == peraturan_id for r in SAMPLE_PERATURAN)
+    result = await db.peraturan.delete_one({"id": peraturan_id})
+    if is_sample:
+        await db.seed_deletions.update_one({"kind": "peraturan", "id": peraturan_id}, {"$set": {"kind": "peraturan", "id": peraturan_id}}, upsert=True)
+    if result.deleted_count == 0 and not is_sample:
+        raise HTTPException(status_code=404, detail="Peraturan tidak ditemukan")
+    return {"id": peraturan_id, "deleted": True}
 
 @api_router.get("/peraturan/{peraturan_id}/pdf")
 async def peraturan_pdf(peraturan_id: str, inline: bool = False):
@@ -1593,11 +1649,16 @@ async def seed_peraturan():
     except Exception as exc:
         logger.error("Object storage init failed: %s", exc)
     now_iso = datetime.now(timezone.utc).isoformat()
+    deleted = {(d["kind"], d["id"]) async for d in db.seed_deletions.find({}, {"_id": 0})}
     for reg in SAMPLE_PERATURAN:
+        if ("peraturan", reg["id"]) in deleted:
+            continue
         existing = await db.peraturan.find_one({"id": reg["id"]}, {"_id": 0})
         if existing is None:
             await db.peraturan.insert_one({**reg, "created_at": now_iso})
     for put in [SAMPLE_PUTUSAN, *EXTRA_SAMPLE_PUTUSAN]:
+        if ("putusan", put["id"]) in deleted:
+            continue
         existing = await db.putusan.find_one({"id": put["id"]}, {"_id": 0})
         if existing is None:
             await db.putusan.insert_one(put.copy())

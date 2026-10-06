@@ -188,4 +188,20 @@
 .compare-col-foot { margin-top:14px; border-top:1px solid var(--line); padding-top:12px; font-size:12px; }
 .compare-col-foot a { color:var(--blue); display:inline-flex; align-items:center; gap:4px; text-decoration:none; }
 @media (max-width:860px) { .compare-columns { grid-template-columns:1fr; } .compare-page { padding:24px 16px 48px; } .compare-body { max-height:none; } }
+.message-top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.copy-answer-btn { display:inline-flex; align-items:center; gap:4px; background:#1e293b; color:#cbd5e1; border:1px solid #334155; border-radius:4px; padding:3px 8px; font-size:10px; font-weight:600; cursor:pointer; letter-spacing:.02em; }
+.copy-answer-btn:hover { background:#0f766e; color:#fff; border-color:#0f766e; }
+.msg-body { margin-top:7px; }
+.msg-body .msg-para { line-height:1.6; font-size:14px; color:#e2e8f0; margin:0 0 10px; }
+.msg-body .msg-list { margin:0 0 10px; padding-left:20px; color:#e2e8f0; font-size:14px; line-height:1.6; }
+.msg-body .msg-list li { margin:0 0 5px; }
+.msg-body .msg-ol { list-style:decimal; }
+.msg-body .msg-ul { list-style:disc; }
+.msg-body strong { color:#fff; }
+.peraturan-item-row { position:relative; display:flex; align-items:stretch; gap:6px; }
+.peraturan-item-row .peraturan-item { flex:1; }
+.peraturan-item-delete { flex:0 0 auto; width:34px; border:1px solid var(--line); border-radius:7px; background:#fff; color:#94a3b8; cursor:pointer; display:grid; place-items:center; transition:background-color .15s, color .15s, border-color .15s; }
+.peraturan-item-delete:hover { background:#fef2f2; color:#dc2626; border-color:#fecaca; }
+.peraturan-delete-detail:hover { background:#fef2f2 !important; color:#dc2626 !important; border-color:#fecaca !important; }
+.db-delete-btn:hover { background:#dc2626 !important; color:#fff !important; border-color:#dc2626 !important; }
 @media (max-width:560px) { .pdf-viewer iframe { height:70vh; } .doc-tabs { margin-left:0; } .reader-toolbar { flex-wrap:wrap; gap:10px; } }
