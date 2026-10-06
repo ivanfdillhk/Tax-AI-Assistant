@@ -39,3 +39,6 @@ Import the `Tax-AI-Assistant` repo (FastAPI + MongoDB + React) from GitHub into 
 3. **PDF viewer (CORS)**: new `GET /api/pdf-proxy?url=&inline=1` streams external PDFs server-side (bypasses source CORS/X-Frame-Options). Frontend PDF tab priority: stored file → proxy(source_url if .pdf) → generated PDF. Backend tested 4/4.
 - Backend testing: all 9 tests passed.
 
+## Update (2026-10) — chat formatting
+- AI assistant answers previously showed raw markdown `**bold**` as literal asterisks. Added `renderRich()` in `App.js` that renders `**bold**` as <strong>, strips stray `*` / backticks / leading `#`, and preserves line breaks. Verified visually: no visible asterisks, citations ([P4] etc.) intact.
+
