@@ -37,6 +37,11 @@ from reportlab.lib.enums import TA_LEFT
 
 
 ROOT_DIR = Path(__file__).parent
+
+PDF_LIBRARY_DIR = APP_DIR / "pdf_library"
+PERATURAN_LIBRARY_DIR = PDF_LIBRARY_DIR / "peraturan"
+PUTUSAN_LIBRARY_DIR = PDF_LIBRARY_DIR / "putusan"
+
 load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
@@ -247,6 +252,70 @@ def document_from_text(filename: str, content: str, source_url: str):
     metadata = infer_metadata(filename, content)
     return {**SAMPLE_PUTUSAN, "id": str(uuid.uuid4()), "slug": str(uuid.uuid4()), **metadata, "summary": content[:280].replace("\n", " "), "body": content[:2000000], "source_url": source_url, "created_at": datetime.now(timezone.utc).isoformat()}
 
+async def sync_putusan_library():
+    PUTUSAN_LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+
+    imported = 0
+    skipped = 0
+    errors = []
+
+    for pdf_path in PUTUSAN_LIBRARY_DIR.glob("*.pdf"):
+        library_path = str(
+            pdf_path.relative_to(APP_DIR)
+        ).replace("\\", "/")
+
+        existing = await db.putusan.find_one(
+            {"library_path": library_path},
+            {"_id": 0}
+        )
+
+        if existing:
+            skipped += 1
+            continue
+
+        try:
+            raw = pdf_path.read_bytes()
+
+            content = _extract_pdf_structured(raw)
+
+            if not content.strip():
+                raise ValueError(
+                    "PDF tidak memiliki teks yang dapat dibaca"
+                )
+
+            document = document_from_text(
+                pdf_path.name,
+                content,
+                library_path
+            )
+
+            document["library_path"] = library_path
+            document["original_filename"] = pdf_path.name
+            document["source_type"] = "pdf_library"
+
+            await db.putusan.insert_one(
+                document.copy()
+            )
+
+            imported += 1
+
+        except Exception as exc:
+            logger.exception(
+                "Gagal sync PDF %s",
+                pdf_path.name
+            )
+
+            errors.append({
+                "file": pdf_path.name,
+                "error": str(exc)
+            })
+
+    return {
+        "imported": imported,
+        "skipped": skipped,
+        "errors": errors
+    }
+
 # Add your routes to the router instead of directly to app
 async def save_uploaded_file(raw: bytes, filename: str, content_type: str, linked_type: str, linked_id: str):
     """Persist original file bytes to object storage + a reference record in Mongo.
@@ -280,6 +349,10 @@ async def save_uploaded_file(raw: bytes, filename: str, content_type: str, linke
 @api_router.get("/")
 async def root():
     return {"message": "TaxLens API ready"}
+
+@api_router.post("/admin/sync-putusan-library")
+async def sync_putusan_library_endpoint():
+    return await sync_putusan_library()
 
 @api_router.get("/putusan/{document_id}")
 async def get_putusan(document_id: str):
