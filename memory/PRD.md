@@ -50,3 +50,8 @@ Import the `Tax-AI-Assistant` repo (FastAPI + MongoDB + React) from GitHub into 
 - `import_public_url` refactored to use shared `_fetch_document_from_url` (behavior unchanged). Backend tested: 10/10 passed.
 
 
+
+## Re-import (2026-10)
+- Re-imported repo (main) — /app code identical to repo. Backend deps installed (rest of requirements separately; litellm 1.80.0 + emergentintegrations 0.2.2 present). Frontend `yarn install` OK (cleared corrupt es-abstract yarn cache).
+- Backend/frontend running; DB seeded; PDF upload OK.
+- Web search & AI Search return 502: EMERGENT_LLM_KEY budget exceeded (not a code bug) — user must top up Universal Key balance.

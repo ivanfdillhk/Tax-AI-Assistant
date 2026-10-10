@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 # Backend URL from environment
-BACKEND_URL = "https://ai-tax-helper-5.preview.emergentagent.com/api"
+BACKEND_URL = "https://tax-assistant-ai-1.preview.emergentagent.com/api"
 
 def test_inline_pdf_download():
     """Test the new inline PDF download feature."""

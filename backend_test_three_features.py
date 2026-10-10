@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 # Backend URL from environment
-BACKEND_URL = "https://ai-tax-helper-5.preview.emergentagent.com/api"
+BACKEND_URL = "https://tax-assistant-ai-1.preview.emergentagent.com/api"
 
 # Stable public PDF URLs for testing
 # Using w3.org dummy PDF (minimal text but reliable, no CAPTCHA)

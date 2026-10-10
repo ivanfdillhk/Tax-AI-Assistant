@@ -12,7 +12,7 @@ import time
 import uuid
 
 # Backend URL from environment
-BACKEND_URL = "https://ai-tax-helper-5.preview.emergentagent.com/api"
+BACKEND_URL = "https://tax-assistant-ai-1.preview.emergentagent.com/api"
 
 def test_refetch_peraturan():
     """TEST 1: Refetch peraturan full text from source."""

@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 
 # Backend URL from environment
-BACKEND_URL = "https://ai-tax-helper-5.preview.emergentagent.com/api"
+BACKEND_URL = "https://tax-assistant-ai-1.preview.emergentagent.com/api"
 
 def test_web_search():
     """TEST 1: Web Search Engine (GET /api/search)"""
