@@ -223,12 +223,37 @@ def _extract_tax_type(content: str):
             return label
     return "Pajak umum"
 
-def _extract_case_type(content: str):
-    head = content[:4000]
-    if re.search(r"Peninjauan\s+Kembali", head, re.I): return "Peninjauan Kembali"
-    if re.search(r"\bgugatan\b", head, re.I): return "Putusan Gugatan"
-    if re.search(r"\bbanding\b", head, re.I): return "Putusan Banding"
-    return "Putusan Pajak"
+CASE_TYPE_BANDING = "Putusan Banding"
+CASE_TYPE_PK = "Peninjauan Kembali"
+CASE_TYPES = (CASE_TYPE_BANDING, CASE_TYPE_PK)
+
+_PK_STRONG = [
+    r"\bB\s*/\s*PK\s*/\s*PJK\b",               # nomor MA, mis. 1234 B/PK/PJK/2020
+    r"\bPK\s*/\s*PJK\b",
+    r"pemohon\s+peninjauan\s+kembali",
+    r"termohon\s+peninjauan\s+kembali",
+    r"memori\s+peninjauan\s+kembali",
+    r"permohonan\s+peninjauan\s+kembali\s+(?:dari|yang\s+diajukan)",
+]
+
+
+def _extract_case_type(content: str, filename: str = "") -> str:
+    """Classify a tax decision as Putusan Banding (Pengadilan Pajak) or Peninjauan Kembali (Mahkamah Agung).
+    Banding decisions often *mention* 'peninjauan kembali' (e.g. hak mengajukan PK), so PK needs
+    strong, structural signals; otherwise the document is treated as a Pengadilan Pajak banding decision."""
+    text = re.sub(r"\s+", " ", content or "")
+    head = text[:1500]
+    body = text[:20000]
+    name = Path(filename or "").stem.replace("_", " ").replace("-", " ")
+    if re.search(r"(?<![A-Za-z])PK(?![A-Za-z])", name) or re.search(r"peninjauan\s+kembali", name, re.I):
+        return CASE_TYPE_PK
+    if any(re.search(p, body, re.I) for p in _PK_STRONG):
+        return CASE_TYPE_PK
+    ma = re.search(r"mahkamah\s+agung", head[:600], re.I)
+    pp = re.search(r"pengadilan\s+pajak", head, re.I)
+    if ma and (not pp or ma.start() < pp.start()) and re.search(r"peninjauan\s+kembali", head, re.I):
+        return CASE_TYPE_PK
+    return CASE_TYPE_BANDING
 
 def _extract_panel(content: str):
     match = re.search(r"Majelis\s+([IVXLCDM]+[A-Z]?)", content[:4000])
@@ -240,11 +265,17 @@ def infer_metadata(filename: str, content: str):
     tahun_match = re.search(r"Tahun\s+(19\d{2}|20\d{2})", content[:4000], re.I)
     year_match = tahun_match or re.search(r"(?:19|20)\d{2}", f"{fallback_name} {content[:3000]}")
     year = int(year_match.group(1) if tahun_match else year_match.group()) if year_match else datetime.now(timezone.utc).year
+    case_type = _extract_case_type(content, filename)
+    if case_type == CASE_TYPE_PK:
+        pk_match = re.search(r"\d{1,6}\s*/?\s*B\s*/\s*PK\s*/\s*PJK\s*/\s*(\d{4})", re.sub(r"\s+", " ", content[:6000]), re.I)
+        if pk_match:
+            nomor = re.sub(r"\s+", "", pk_match.group(0)).replace("B/", " B/", 1).strip()
+            year = int(pk_match.group(1))
     meta = {
         "title": nomor or fallback_name,
         "year": year,
         "tax_type": _extract_tax_type(content),
-        "case_type": _extract_case_type(content),
+        "case_type": case_type,
     }
     panel = _extract_panel(content)
     if panel: meta["panel"] = panel
@@ -1923,6 +1954,14 @@ async def seed_peraturan():
     logger.info(
         "Peraturan & putusan samples ensured in database"
     )
+    # Re-classify putusan whose case_type is not one of the two supported types
+    reclassified = 0
+    async for put in db.putusan.find({"case_type": {"$nin": list(CASE_TYPES)}}, {"_id": 0, "id": 1, "body": 1, "original_filename": 1}):
+        new_type = _extract_case_type(put.get("body", ""), put.get("original_filename") or "")
+        await db.putusan.update_one({"id": put["id"]}, {"$set": {"case_type": new_type}})
+        reclassified += 1
+    if reclassified:
+        logger.info("Re-classified case_type for %d putusan", reclassified)
 
     app.state.pdf_library_sync_task = asyncio.create_task(
         auto_sync_pdf_library()
