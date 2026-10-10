@@ -526,10 +526,13 @@ async def list_putusan(q: Optional[str] = None, year: Optional[str] = None, tax_
     year_int = int(year) if year and year.strip().isdigit() else None
     if year_int: query["year"] = year_int
     if tax_type: query["tax_type"] = tax_type
-    if case_type: query["case_type"] = case_type
+    if case_type:
+        ct = case_type.lower()
+        keyword = "peninjauan" if "peninjauan" in ct else ("banding" if "banding" in ct else case_type)
+        query["case_type"] = {"$regex": re.escape(keyword), "$options": "i"}
     documents = await db.putusan.find(query, {"_id": 0}).sort("year", -1).to_list(50)
     sample_text = " ".join(str(value) for value in SAMPLE_PUTUSAN.values())
-    sample_matches = (not q or q.lower() in sample_text.lower()) and (not year_int or year_int == SAMPLE_PUTUSAN["year"]) and (not tax_type or tax_type.lower() == SAMPLE_PUTUSAN["tax_type"].lower()) and (not case_type or case_type.lower() == SAMPLE_PUTUSAN["case_type"].lower())
+    sample_matches = (not q or q.lower() in sample_text.lower()) and (not year_int or year_int == SAMPLE_PUTUSAN["year"]) and (not tax_type or tax_type.lower() == SAMPLE_PUTUSAN["tax_type"].lower()) and (not case_type or ("peninjauan" if "peninjauan" in case_type.lower() else ("banding" if "banding" in case_type.lower() else case_type.lower())) in SAMPLE_PUTUSAN["case_type"].lower())
     if not documents and sample_matches:
         if not await db.seed_deletions.find_one({"kind": "putusan", "id": SAMPLE_PUTUSAN["id"]}):
             documents = [SAMPLE_PUTUSAN]

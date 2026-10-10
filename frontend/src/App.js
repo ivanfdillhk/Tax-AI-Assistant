@@ -619,8 +619,9 @@ const Home = () => {
               {putusanFacets.years.map((y) => <option key={y} value={y}>{y}</option>)}
             </select>
             <select data-testid="db-filter-case-type" value={filters.case_type} onChange={(event) => applyDbPutusanFilter({ case_type: event.target.value })}>
-              <option value="">Semua jenis sengketa</option>
-              {putusanFacets.caseTypes.map((c) => <option key={c} value={c}>{c}</option>)}
+              <option value="" disabled hidden>Jenis putusan</option>
+              <option value="Putusan Banding">Putusan Banding</option>
+              <option value="Peninjauan Kembali">Peninjauan Kembali</option>
             </select>
             {(filters.year || filters.case_type) && <button className="database-filter-reset" data-testid="db-filter-reset" onClick={() => applyDbPutusanFilter({ year: "", case_type: "" })}><X size={13} /> Reset</button>}
           </div>
