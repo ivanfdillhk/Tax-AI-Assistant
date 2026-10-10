@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "@/App.css";
 import { BrowserRouter } from "react-router-dom";
 import axios from "axios";
@@ -197,6 +197,7 @@ const Home = () => {
       return <span key={i}>{part.replace(/\*/g, "").replace(/^[ \t]*#{1,6}[ \t]*/gm, "")}</span>;
     });
   };
+  const dbReqRef = useRef(0);
   const renderAiSource = (s) => (
     <a className="ai-source" href={s.url} target="_blank" rel="noreferrer" data-testid={`ai-source-${s.number}`} key={s.number}>
       <span className="ai-source-num">{s.number}</span>
@@ -207,6 +208,7 @@ const Home = () => {
   );
   const goToKnowledge = () => { setView("knowledge"); setSearchOpen(false); setPeraturanOpen(false); };
   const loadDatabase = async (filterOverride, queryOverride) => {
+    const reqId = ++dbReqRef.current;
     const f = filterOverride || filters;
     const q = queryOverride !== undefined ? queryOverride : query;
     try {
@@ -214,6 +216,7 @@ const Home = () => {
         axios.get(`${API}/putusan`, { params: { q: q || undefined, year: f.year || undefined, case_type: f.case_type || undefined } }),
         axios.get(`${API}/peraturan`, { params: { q: q || undefined, jenis: perFilter.jenis || undefined, status: perFilter.status || undefined } }).catch(() => ({ data: [] })),
       ]);
+      if (reqId !== dbReqRef.current) return; // ignore stale responses
       setDocuments(putusanRes.data); setPeraturanResults(peraturanRes.data);
     } catch (_) { /* keep previous data on failure */ }
   };

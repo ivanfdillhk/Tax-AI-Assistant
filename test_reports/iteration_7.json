@@ -1,0 +1,38 @@
+{
+  "summary": "Tested db-filter-case-type restriction to only 'Putusan Banding' and 'Peninjauan Kembali'. Backend GET /api/putusan with case_type filter works correctly (banding regex matches only Banding; PK returns []; no filter returns all). Frontend select has exactly 2 selectable options with placeholder disabled+hidden. Banding filter renders only Banding items (5), PK shows empty message, Reset button appears and restores list. Year+case_type combo regression passes. Backend 4/4 pytest passed. One minor race-condition observed in UI (initial unfiltered fetch from goToDatabase occasionally resolves AFTER filter fetch, briefly leaving a stale non-Banding item visible), but functional outcome of the feature is correct.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "goToDatabase + immediate filter change",
+       "issue": "Race condition: loadDatabase() is invoked by goToDatabase() with no filter (returns 6) and may resolve AFTER applyDbPutusanFilter()'s request (returns 5), causing stale non-Banding item to briefly appear in Putusan list. Deterministic test triggered the leak on first automated run; manual/slower interaction is fine. Low priority.",
+       "affected_selectors": ["db-filter-case-type", "database-col-putusan"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_putusan_case_type_filter.py",
+    "/app/test_reports/pytest/case_type_filter.xml"
+  ],
+  "action_items": [
+    "(Optional, low priority) Cancel/ignore stale loadDatabase response when a newer filter request is in-flight (e.g., AbortController or request sequence id) to prevent the brief stale-item flash when switching to Tax Database and immediately picking a filter."
+  ],
+  "critical_code_review_comments": [
+    "server.py list_putusan case_type regex approach (keyword 'banding'/'peninjauan') is a solid, case-insensitive match that correctly excludes 'Putusan Pajak' fallback entries from the 'Putusan Banding' filter.",
+    "server.py grew past 700+ lines — consider splitting putusan/peraturan/branding/export into submodules.",
+    "App.js is ~1k+ lines in a single component — splitting Home into feature components (TaxDatabase, TaxKnowledge, PutusanWorkspace) would improve maintainability.",
+    "loadDatabase has no request-cancellation; concurrent calls can produce out-of-order state updates (see integration_issue)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_putusan_case_type_filter.py"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100% functional (minor race flicker)"},
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "db-filter-case-type now exposes only 2 selectable options (Putusan Banding, Peninjauan Kembali). Backend regex case-insensitive on 'banding'/'peninjauan' keywords works correctly and is covered by /app/backend/tests/test_putusan_case_type_filter.py.",
+  "rca of the issue": "N/A — all requested behaviors verified. Only observation: loadDatabase() lacks request de-duplication which can produce a stale UI flash when goToDatabase and applyDbPutusanFilter fire in quick succession."
+}
