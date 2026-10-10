@@ -4,6 +4,7 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
+import asyncio
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
@@ -35,8 +36,9 @@ from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, BaseDocTemplate, Frame, PageTemplate, Paragraph, Spacer, HRFlowable, Table, TableStyle, PageBreak, Flowable, Image as RLImage
 from reportlab.lib.enums import TA_LEFT
 
-
 ROOT_DIR = Path(__file__).parent
+APP_DIR = ROOT_DIR.parent
+PDF_LIBRARY_SYNC_INTERVAL = 60
 
 PDF_LIBRARY_DIR = APP_DIR / "pdf_library"
 PERATURAN_LIBRARY_DIR = PDF_LIBRARY_DIR / "peraturan"
@@ -253,6 +255,7 @@ def document_from_text(filename: str, content: str, source_url: str):
     return {**SAMPLE_PUTUSAN, "id": str(uuid.uuid4()), "slug": str(uuid.uuid4()), **metadata, "summary": content[:280].replace("\n", " "), "body": content[:2000000], "source_url": source_url, "created_at": datetime.now(timezone.utc).isoformat()}
 
 async def sync_putusan_library():
+    """Sync PDF baru dari pdf_library/putusan ke db.putusan."""
     PUTUSAN_LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
 
     imported = 0
@@ -274,9 +277,14 @@ async def sync_putusan_library():
             continue
 
         try:
-            raw = pdf_path.read_bytes()
+            raw = await asyncio.to_thread(
+                pdf_path.read_bytes
+            )
 
-            content = _extract_pdf_structured(raw)
+            content = await asyncio.to_thread(
+                _extract_pdf_structured,
+                raw
+            )
 
             if not content.strip():
                 raise ValueError(
@@ -299,9 +307,14 @@ async def sync_putusan_library():
 
             imported += 1
 
+            logger.info(
+                "Putusan PDF berhasil di-sync: %s",
+                pdf_path.name
+            )
+
         except Exception as exc:
             logger.exception(
-                "Gagal sync PDF %s",
+                "Gagal sync putusan PDF %s",
                 pdf_path.name
             )
 
@@ -315,6 +328,137 @@ async def sync_putusan_library():
         "skipped": skipped,
         "errors": errors
     }
+
+
+async def sync_peraturan_library():
+    """Sync PDF baru dari pdf_library/peraturan ke db.peraturan."""
+    PERATURAN_LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+
+    imported = 0
+    skipped = 0
+    errors = []
+
+    for pdf_path in PERATURAN_LIBRARY_DIR.glob("*.pdf"):
+        library_path = str(
+            pdf_path.relative_to(APP_DIR)
+        ).replace("\\", "/")
+
+        existing = await db.peraturan.find_one(
+            {"library_path": library_path},
+            {"_id": 0}
+        )
+
+        if existing:
+            skipped += 1
+            continue
+
+        try:
+            raw = await asyncio.to_thread(
+                pdf_path.read_bytes
+            )
+
+            content = await asyncio.to_thread(
+                _extract_pdf_structured,
+                raw
+            )
+
+            if not content.strip():
+                raise ValueError(
+                    "PDF tidak memiliki teks yang dapat dibaca"
+                )
+
+            document = peraturan_from_text(
+                pdf_path.name,
+                content,
+                library_path
+            )
+
+            document["library_path"] = library_path
+            document["original_filename"] = pdf_path.name
+            document["source_type"] = "pdf_library"
+
+            await db.peraturan.insert_one(
+                document.copy()
+            )
+
+            imported += 1
+
+            logger.info(
+                "Peraturan PDF berhasil di-sync: %s",
+                pdf_path.name
+            )
+
+        except Exception as exc:
+            logger.exception(
+                "Gagal sync peraturan PDF %s",
+                pdf_path.name
+            )
+
+            errors.append({
+                "file": pdf_path.name,
+                "error": str(exc)
+            })
+
+    return {
+        "imported": imported,
+        "skipped": skipped,
+        "errors": errors
+    }
+
+
+async def sync_pdf_library():
+    """Sync putusan dan peraturan sekaligus."""
+    putusan_result = await sync_putusan_library()
+    peraturan_result = await sync_peraturan_library()
+
+    return {
+        "putusan": putusan_result,
+        "peraturan": peraturan_result
+    }
+
+
+async def auto_sync_pdf_library():
+    """Scan PDF library otomatis selama backend hidup."""
+    while True:
+        try:
+            result = await sync_pdf_library()
+
+            putusan_imported = result["putusan"]["imported"]
+            peraturan_imported = result["peraturan"]["imported"]
+
+            if putusan_imported or peraturan_imported:
+                logger.info(
+                    "PDF Library auto-sync: %s putusan baru, %s peraturan baru",
+                    putusan_imported,
+                    peraturan_imported
+                )
+
+            total_errors = (
+                len(result["putusan"]["errors"])
+                + len(result["peraturan"]["errors"])
+            )
+
+            if total_errors:
+                logger.warning(
+                    "PDF Library auto-sync memiliki %s error",
+                    total_errors
+                )
+
+        except asyncio.CancelledError:
+            logger.info(
+                "PDF Library auto-sync dihentikan"
+            )
+            raise
+
+        except Exception as exc:
+            logger.exception(
+                "PDF Library auto-sync gagal: %s",
+                exc
+            )
+
+        await asyncio.sleep(
+            PDF_LIBRARY_SYNC_INTERVAL
+        )
 
 # Add your routes to the router instead of directly to app
 async def save_uploaded_file(raw: bytes, filename: str, content_type: str, linked_type: str, linked_id: str):
@@ -353,6 +497,16 @@ async def root():
 @api_router.post("/admin/sync-putusan-library")
 async def sync_putusan_library_endpoint():
     return await sync_putusan_library()
+
+
+@api_router.post("/admin/sync-peraturan-library")
+async def sync_peraturan_library_endpoint():
+    return await sync_peraturan_library()
+
+
+@api_router.post("/admin/sync-pdf-library")
+async def sync_pdf_library_endpoint():
+    return await sync_pdf_library()
 
 @api_router.get("/putusan/{document_id}")
 async def get_putusan(document_id: str):
@@ -1729,14 +1883,40 @@ async def seed_peraturan():
         existing = await db.peraturan.find_one({"id": reg["id"]}, {"_id": 0})
         if existing is None:
             await db.peraturan.insert_one({**reg, "created_at": now_iso})
+    # for put in [SAMPLE_PUTUSAN, *EXTRA_SAMPLE_PUTUSAN]:
+    #     if ("putusan", put["id"]) in deleted:
+    #         continue
+    #     existing = await db.putusan.find_one({"id": put["id"]}, {"_id": 0})
+    #     if existing is None:
+    #         await db.putusan.insert_one(put.copy())
+    # logger.info("Peraturan & putusan samples ensured in database")
     for put in [SAMPLE_PUTUSAN, *EXTRA_SAMPLE_PUTUSAN]:
         if ("putusan", put["id"]) in deleted:
             continue
-        existing = await db.putusan.find_one({"id": put["id"]}, {"_id": 0})
-        if existing is None:
-            await db.putusan.insert_one(put.copy())
-    logger.info("Peraturan & putusan samples ensured in database")
 
+        existing = await db.putusan.find_one(
+            {"id": put["id"]},
+            {"_id": 0}
+        )
+
+        if existing is None:
+            await db.putusan.insert_one(
+                put.copy()
+            )
+
+    logger.info(
+        "Peraturan & putusan samples ensured in database"
+    )
+
+    app.state.pdf_library_sync_task = asyncio.create_task(
+        auto_sync_pdf_library()
+    )
+
+    logger.info(
+        "PDF Library auto-sync started "
+        "(interval %s detik)",
+        PDF_LIBRARY_SYNC_INTERVAL
+    )    
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
