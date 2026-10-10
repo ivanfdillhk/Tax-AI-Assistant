@@ -1,0 +1,31 @@
+{
+  "summary": "Verified the typography/reflow visual edit on putusan detail. Backend: 4/4 pytest passed (upload /app/test_putusan_header.pdf -> summary ends cleanly, GET returns identical summary, cleanup via DELETE). UI: Detail page of PUT-009396.16/2024/PP/M.IXB Tahun 2025 shows document-summary of 419 chars ending with '…' (word-boundary ellipsis, not mid-word). Buttons Simpan/Bagikan/Unduh PDF sit BELOW the summary (btn.top=577 > summary.bottom=557, no overlap). document-body renders 46 p.doc-para, 8 h4.doc-heading (incl. 'PUTUSAN', 'DEMI KEADILAN BERDASARKAN KETUHANAN YANG MAHA ESA', 'PENGADILAN PAJAK', 'PERTIMBANGAN HUKUM'), 3 p.doc-field (incl. 'Pemohon Banding : PT BORNEO INDAH MARJAYA'). Paragraph markers: 135 span.doc-line with id='paragraph-Pn' and data-testid='document-paragraph-Pn' — EXACTLY matches 135 non-empty lines of /api/putusan/{id}.body. Navigation to #paragraph-P5 scrolls into viewport. Second putusan PUT-004812.14/2021/PP/M.IIIA Tahun 2023 also renders cleanly with sentence-ending summary. Regression: Compare page (compare-body-first & -second visible) and Katalog Peraturan modal render without errors. Zero console errors across the entire session.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "document-body (PUT-009396...)", "issues": ["Party name 'PT BORNEO INDAH MARJAYA' is promoted to h4.doc-heading 4 times by the ALL-CAPS heading heuristic (isHeadingLine). It is a party name, not a section title. Consider blacklisting common corp prefixes (PT, CV, PERSEROAN, PERSEKUTUAN) from heading promotion, or require stronger section-title keywords.", "The 'Alamat : …' doc-field line was merged with a trailing continuation 'Pengadilan Pajak tersebut,' because the previous field line ends with a comma — field-continuation glue (continuesField) can over-reach when PDF line breaks happen to leave a comma; consider also requiring the next line to start lowercase before gluing fields."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_summary_and_body.py",
+    "/app/test_reports/pytest/summary_body.xml"
+  ],
+  "action_items": [
+    "(Optional, minor) Refine isHeadingLine heuristic to avoid promoting ALL-CAPS party names (e.g., skip lines starting with 'PT ', 'CV ', 'PERSEROAN', etc.) so they stay as regular paragraphs.",
+    "(Optional, minor) Tighten the field-continuation rule in groupBodyLines so a trailing comma alone doesn't absorb an unrelated follow-up fragment."
+  ],
+  "critical_code_review_comments": [
+    "_make_summary (server.py ~L284) correctly truncates at '. ' / '; ' when available (threshold 160) and otherwise cuts at word boundary + ellipsis, strips table markers and spaced-caps — matches cleanLede on the frontend; both paths validated.",
+    "renderReflowedText emits span.doc-line with id='paragraph-Pn' and data-testid='document-paragraph-Pn'; counter aligns 1:1 with non-empty lines in body, preserving citation navigation.",
+    "No console errors across detail/compare/peraturan flows."
+  ],
+  "updated_files": ["/app/backend/tests/test_summary_and_body.py", "/app/test_reports/pytest/summary_body.xml"],
+  "success_rate": {"backend": "100% (4/4)", "frontend": "100%"},
+  "seed_data_creation": "Uploaded test_putusan_header.pdf once during backend test, deleted at teardown. No residual data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Typography/reflow pipeline verified end-to-end. doc-line IDs count equals /api/putusan/{id}.body non-empty line count — safe to rely on for citation scroll. Minor cosmetic items (party-name promoted to heading, field continuation over-glue) are documented as potential future refinements and are not regressions.",
+  "rca of the issue": "N/A — visual edit verification task passed."
+}

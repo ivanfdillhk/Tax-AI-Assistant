@@ -68,6 +68,7 @@ const FIELD_RE = /^[^:]{1,45}\s:\s?\S/;
 const isHeadingLine = (line) => {
   const t = line.trim();
   if (t.length < 3 || t.length > 80 || t.includes(":")) return false;
+  if (/^(PT|CV|UD|PD|FA|KOPERASI|YAYASAN|PERSEROAN|PERSEKUTUAN|BUT|TBK)\b\.?/.test(t) || /\bTBK\.?$/.test(t)) return false;
   const letters = t.replace(/[^A-Za-z]/g, "");
   return letters.length >= 3 && letters === letters.toUpperCase();
 };
@@ -88,7 +89,9 @@ const groupBodyLines = (chunk) => {
     const isOpener = OPENER_RE.test(line);
     const continuesPara = current && current.type === "para" && !isField && !isList && !isOpener && !endsBlock(prev)
       && (!pendingGap || /^[a-z0-9(]/.test(line));
-    const continuesField = current && current.type === "field" && !isField && !isList && !isOpener && /,$/.test(prev);
+    const fieldKey = current?.type === "field" ? current.lines[0].split(":")[0] : "";
+    const continuesField = current && current.type === "field" && !isField && !isList && !isOpener && /,$/.test(prev)
+      && (/^[a-z0-9(]/.test(line) || (/alamat/i.test(fieldKey) && !/\btersebut\b/i.test(line)));
     if (continuesPara || continuesField) current.lines.push(line);
     else { flush(); current = { type: isField ? "field" : "para", lines: [line] }; }
     pendingGap = false;

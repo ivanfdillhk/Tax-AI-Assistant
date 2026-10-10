@@ -70,3 +70,7 @@ Import the `Tax-AI-Assistant` repo (FastAPI + MongoDB + React) from GitHub into 
 - `_extract_case_type(content, filename)`: PK if filename has PK, strong PK signals (B/PK/PJK nomor, Pemohon/Termohon/Memori PK), or Mahkamah Agung kop before "Pengadilan Pajak" in header; else Banding. "Putusan Pajak"/"Putusan Gugatan" no longer produced. PK title = MA nomor (e.g. 1234 B/PK/PJK/2024).
 - Startup migration re-classifies putusan with other case_type values. Test fixture: /app/test_pk_putusan.pdf. iteration_8: 100%.
 - Removed: "Sumber publik" footer, topbar "Hubungkan Drive" & "File" buttons.
+
+## Update (2026-10) — readable document view
+- Frontend `groupBodyLines/renderReflowedText`: PDF-wrapped lines joined into paragraphs (p.doc-para), ALL-CAPS section titles → h4.doc-heading (party names like "PT …" excluded), "Key : value" → p.doc-field, legal openers (Telah membaca/Menimbang/…) start new paragraphs. Each source line keeps span#paragraph-Pn (citation IDs unchanged, match backend paragraph_records).
+- `cleanLede()` + backend `_make_summary()`: summary ends at sentence or word boundary (…); action buttons moved below lede (no overlap). Font: Source Serif 4 body, IBM Plex Sans lede. iteration_10: 100%.
