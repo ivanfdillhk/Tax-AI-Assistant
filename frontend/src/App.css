@@ -206,3 +206,23 @@
 .db-delete-btn:hover { background:#dc2626 !important; color:#fff !important; border-color:#dc2626 !important; }
 @media (max-width:560px) { .pdf-viewer iframe { height:70vh; } .doc-tabs { margin-left:0; } .reader-toolbar { flex-wrap:wrap; gap:10px; } }
 .ai-sources-sub { margin-top:14px; }
+
+/* ---- Readable document typography (reflowed paragraphs) ---- */
+.document-head h1 { margin-right:0; }
+.document-lede { font-family:"IBM Plex Sans",system-ui,sans-serif; font-size:15.5px; line-height:1.7; color:#475569; max-width:780px; overflow-wrap:anywhere; white-space:normal; }
+.head-actions { position:static; margin-top:20px; flex-wrap:wrap; }
+.document-body { font-family:"Source Serif 4",Georgia,"Times New Roman",serif; font-size:17px; line-height:1.75; color:#1e293b; padding:56px clamp(24px,6vw,88px); }
+.document-body > * { max-width:72ch; margin-left:auto; margin-right:auto; }
+.document-body .document-table-wrap { max-width:none; }
+.document-body p:first-child { font-weight:inherit; text-align:inherit; letter-spacing:normal; }
+.document-body p.doc-para { margin:0 auto 16px; text-align:left; hyphens:manual; text-wrap:pretty; overflow-wrap:anywhere; }
+.document-body p.doc-field { margin:0 auto 6px; text-align:left; }
+.document-body p.doc-para + p.doc-field, .document-body h4.doc-heading + p.doc-field { margin-top:4px; }
+.document-body p.doc-field + p.doc-para { margin-top:14px; }
+.document-body h4.doc-heading { font-family:"Source Serif 4",Georgia,serif; font-weight:700; font-size:16px; letter-spacing:.06em; text-align:center; text-transform:uppercase; margin:30px auto 14px; color:#0f172a; }
+.document-body h4.doc-heading:first-child { margin-top:0; font-size:19px; letter-spacing:.14em; }
+.document-body .doc-line { scroll-margin-top:140px; border-radius:3px; transition:background .3s; }
+.document-body .doc-line:target { background:#fef3c7; box-shadow:0 0 0 3px #fef3c7; }
+.compare-body p.doc-para, .peraturan-body p.doc-para { text-align:left; margin:0 0 12px; }
+.compare-body h4.doc-heading, .peraturan-body h4.doc-heading { font-size:13px; letter-spacing:.06em; text-align:center; margin:18px 0 10px; }
+.compare-body p.doc-field, .peraturan-body p.doc-field { margin:0 0 4px; }

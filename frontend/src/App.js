@@ -62,6 +62,71 @@ const renderRich = (text) => {
 };
 const plainAnswer = (t) => (t || "").replace(/\*\*/g, "").replace(/`+/g, "");
 
+/* ---------- Document reflow: join PDF-wrapped lines into readable paragraphs ---------- */
+const LIST_START_RE = /^\s*(\(?\d{1,3}[.)]|\(?[a-zA-Z][.)]|[-•–])\s+/;
+const FIELD_RE = /^[^:]{1,45}\s:\s?\S/;
+const isHeadingLine = (line) => {
+  const t = line.trim();
+  if (t.length < 3 || t.length > 80 || t.includes(":")) return false;
+  const letters = t.replace(/[^A-Za-z]/g, "");
+  return letters.length >= 3 && letters === letters.toUpperCase();
+};
+const collapseSpacedCaps = (t) => t.replace(/\b(?:[A-Z] ){2,}[A-Z]\b/g, (m) => m.replace(/ /g, ""));
+const endsBlock = (t) => /[.;:!?]["\u201d\u2019')]*$/.test(t.trim());
+const OPENER_RE = /^(Telah\s+(membaca|mendengar|memeriksa)|Menimbang|Mengingat|Memperhatikan|Menetapkan|Memutuskan|Mengadili|Demikian\s+diputus|Dengan\s+demikian)/;
+
+const groupBodyLines = (chunk) => {
+  const blocks = []; let current = null; let pendingGap = false;
+  const flush = () => { if (current) { blocks.push(current); current = null; } };
+  chunk.split("\n").forEach((raw) => {
+    const line = raw.trim();
+    if (!line) { pendingGap = true; return; }
+    if (isHeadingLine(line)) { flush(); blocks.push({ type: "heading", lines: [line] }); pendingGap = false; return; }
+    const isField = FIELD_RE.test(line);
+    const isList = LIST_START_RE.test(line);
+    const prev = current?.lines[current.lines.length - 1] || "";
+    const isOpener = OPENER_RE.test(line);
+    const continuesPara = current && current.type === "para" && !isField && !isList && !isOpener && !endsBlock(prev)
+      && (!pendingGap || /^[a-z0-9(]/.test(line));
+    const continuesField = current && current.type === "field" && !isField && !isList && !isOpener && /,$/.test(prev);
+    if (continuesPara || continuesField) current.lines.push(line);
+    else { flush(); current = { type: isField ? "field" : "para", lines: [line] }; }
+    pendingGap = false;
+  });
+  flush();
+  return blocks;
+};
+
+const renderReflowedText = (chunk, withIds, state) => groupBodyLines(chunk).map((block) => {
+  state.key += 1;
+  const parts = block.lines.map((line, i) => {
+    const prev = i > 0 ? block.lines[i - 1] : "";
+    const sep = i === 0 ? "" : (prev.endsWith("-") ? "" : " ");
+    const shown = block.type === "heading" ? collapseSpacedCaps(line) : line;
+    if (withIds) {
+      state.counter += 1; const pid = `P${state.counter}`;
+      return <span key={pid}>{sep}<span className="doc-line" id={`paragraph-${pid}`} data-testid={`document-paragraph-${pid}`}>{shown}</span></span>;
+    }
+    return <span key={i}>{sep}{shown}</span>;
+  });
+  if (block.type === "heading") return <h4 className="doc-heading" key={`h${state.key}`}>{parts}</h4>;
+  if (block.type === "field") return <p className="doc-field" key={`f${state.key}`}>{parts}</p>;
+  return <p className="doc-para" key={`p${state.key}`}>{parts}</p>;
+});
+
+/* ---------- Lede: a clean, complete-sentence summary ---------- */
+const cleanLede = (summary, body) => {
+  const norm = (t) => collapseSpacedCaps((t || "").replace(/\[\/?TABLE\]/g, " ").replace(/\s+/g, " ").trim());
+  const s = norm(summary);
+  if (s && /[.!?…]$/.test(s) && s.length <= 480) return s;
+  const src = norm(body) || s;
+  if (src.length <= 420) return src;
+  const cut = src.slice(0, 420);
+  const lastStop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("; "));
+  if (lastStop > 160) return cut.slice(0, lastStop + 1);
+  return cut.slice(0, cut.lastIndexOf(" ")).replace(/[,;:]$/, "") + "…";
+};
+
 const PdfFrame = ({ url, testId }) => {
   const [blobUrl, setBlobUrl] = useState("");
   const [status, setStatus] = useState("loading");
@@ -424,30 +489,19 @@ const Home = () => {
   const openSearchQuick = () => { setQuery(""); searchDocuments(); };
 
   const renderBodyWithTables = (body, { withParagraphIds = false } = {}) => {
-    const nodes = []; let counter = 0; let keyIdx = 0;
+    const nodes = []; const state = { counter: 0, key: 0 };
+    const text = body || "";
     const regex = /\[TABLE\]\s*\n([\s\S]*?)\n\s*\[\/TABLE\]/g;
     let lastIndex = 0; let match;
-    while ((match = regex.exec(body)) !== null) {
-      const textChunk = body.slice(lastIndex, match.index);
-      textChunk.split("\n").forEach((line) => {
-        keyIdx += 1;
-        if (!line.trim()) { nodes.push(<div className="document-gap" key={`g${keyIdx}`} />); return; }
-        if (withParagraphIds) { counter += 1; const pid = `P${counter}`; nodes.push(<p id={`paragraph-${pid}`} data-testid={`document-paragraph-${pid}`} key={`p${keyIdx}`}>{line}</p>); }
-        else { nodes.push(<p key={`p${keyIdx}`}>{line}</p>); }
-      });
+    while ((match = regex.exec(text)) !== null) {
+      nodes.push(...renderReflowedText(text.slice(lastIndex, match.index), withParagraphIds, state));
       const rows = match[1].split("\n").map((row) => row.split("\t"));
       const [header, ...dataRows] = rows;
-      keyIdx += 1;
-      nodes.push(<div className="document-table-wrap" key={`t${keyIdx}`} data-testid="document-table"><table className="document-table"><thead><tr>{header.map((cell, idx) => <th key={idx}>{cell}</th>)}</tr></thead><tbody>{dataRows.map((row, rowIdx) => <tr key={rowIdx}>{row.map((cell, cellIdx) => <td key={cellIdx}>{cell}</td>)}</tr>)}</tbody></table></div>);
+      state.key += 1;
+      nodes.push(<div className="document-table-wrap" key={`t${state.key}`} data-testid="document-table"><table className="document-table"><thead><tr>{header.map((cell, idx) => <th key={idx}>{cell}</th>)}</tr></thead><tbody>{dataRows.map((row, rowIdx) => <tr key={rowIdx}>{row.map((cell, cellIdx) => <td key={cellIdx}>{cell}</td>)}</tr>)}</tbody></table></div>);
       lastIndex = regex.lastIndex;
     }
-    const tail = body.slice(lastIndex);
-    tail.split("\n").forEach((line) => {
-      keyIdx += 1;
-      if (!line.trim()) { nodes.push(<div className="document-gap" key={`g${keyIdx}`} />); return; }
-      if (withParagraphIds) { counter += 1; const pid = `P${counter}`; nodes.push(<p id={`paragraph-${pid}`} data-testid={`document-paragraph-${pid}`} key={`p${keyIdx}`}>{line}</p>); }
-      else { nodes.push(<p key={`p${keyIdx}`}>{line}</p>); }
-    });
+    nodes.push(...renderReflowedText(text.slice(lastIndex), withParagraphIds, state));
     return nodes;
   };
 
@@ -697,7 +751,7 @@ const Home = () => {
         {urlOpen && <form className="url-import-form" data-testid="url-import-form" onSubmit={importUrl}><div className="url-input-wrap"><Link2 size={16} /><input data-testid="url-import-input" type="url" value={urlInput} onChange={(event) => setUrlInput(event.target.value)} placeholder="Tempel URL putusan publik, misal https://..." required /></div><button className="primary-button" data-testid="url-import-submit" type="submit" disabled={importingUrl || !urlInput.trim()}>{importingUrl ? "Mengimpor…" : "Impor & baca"}</button><button className="icon-button" data-testid="url-import-close" type="button" onClick={() => { setUrlOpen(false); setUrlInput(""); }}><X size={16} /></button></form>}
         {searchOpen && <div className="search-results" data-testid="search-results"><div className="filter-row"><select data-testid="filter-year" value={filters.year} onChange={(event) => setFilters({ ...filters, year: event.target.value })}><option value="">Semua tahun</option><option value="2022">2022</option><option value="2021">2021</option></select><span className="filter-divider">Peraturan:</span><select data-testid="filter-per-jenis" value={perFilter.jenis} onChange={(event) => applyPerFilter({ jenis: event.target.value })}><option value="">Semua jenis</option><option value="UU">UU</option><option value="PP">PP</option><option value="PMK">PMK</option><option value="PER-DJP">PER-DJP</option><option value="SE-DJP">SE-DJP</option></select><select data-testid="filter-per-status" value={perFilter.status} onChange={(event) => applyPerFilter({ status: event.target.value })}><option value="">Semua status</option><option value="Berlaku">Berlaku</option><option value="Dicabut">Dicabut</option><option value="Diubah">Diubah</option></select><span>{documents.length} putusan · {peraturanResults.length} peraturan</span></div>{documents.length > 0 && <div className="result-group-label">PUTUSAN</div>}{documents.map((item) => <button className="result-item" data-testid={`search-result-${item.id}`} key={item.id} onClick={() => { loadDocument(item.id); setSearchOpen(false); }}><strong>{item.title}</strong><span>{item.tax_type} · {item.year} · {item.case_type}</span></button>)}{peraturanResults.length > 0 && <div className="result-group-label">PERATURAN</div>}{peraturanResults.map((reg) => <button className="result-item result-item-peraturan" data-testid={`search-peraturan-${reg.id}`} key={reg.id} onClick={() => { openPeraturanById(reg.id); setSearchOpen(false); }}><strong><span className={`tag tag-${reg.jenis.toLowerCase().replace("-", "")}`}>{reg.jenis}</span> {reg.nomor} — {reg.judul}</strong><span>{reg.tahun} · {reg.status}</span></button>)}{documents.length === 0 && peraturanResults.length === 0 && <div className="result-empty" data-testid="search-no-results">Tidak ada hasil untuk pencarian ini.</div>}</div>}
         <div className="import-status" data-testid="import-status">{importStatus}</div>
-        <div className="document-head"><div className="tag-row"><span className="tag blue-tag">PUTUSAN</span><span className="tag">{document.tax_type}</span><span className="tag">{document.year}</span></div><h1 data-testid="document-title">{document.title}</h1><p className="document-lede" data-testid="document-summary">{document.summary}</p><div className="head-actions"><button className={`outline-button ${savedIds.includes(document.id) ? "is-saved" : ""}`} data-testid="save-document-button" onClick={toggleSave}><BookOpen size={16} /> {savedIds.includes(document.id) ? "Tersimpan" : "Simpan"}</button><button className="outline-button" data-testid="share-document-button" onClick={shareDocument}>Bagikan <ArrowUpRight size={15} /></button><button className="outline-button" data-testid="download-pdf-button" onClick={() => window.open(putusanPdfUrl(document.id, false), "_blank")}><Download size={16} /> Unduh PDF</button>{document.file_id && <button className="outline-button" data-testid="download-original-button" onClick={() => downloadOriginal(document.file_id, document.original_filename)}><Download size={16} /> Unduh file asli</button>}</div></div>
+        <div className="document-head"><div className="tag-row"><span className="tag blue-tag">PUTUSAN</span><span className="tag">{document.tax_type}</span><span className="tag">{document.year}</span></div><h1 data-testid="document-title">{document.title}</h1><p className="document-lede" data-testid="document-summary">{cleanLede(document.summary, document.body)}</p><div className="head-actions"><button className={`outline-button ${savedIds.includes(document.id) ? "is-saved" : ""}`} data-testid="save-document-button" onClick={toggleSave}><BookOpen size={16} /> {savedIds.includes(document.id) ? "Tersimpan" : "Simpan"}</button><button className="outline-button" data-testid="share-document-button" onClick={shareDocument}>Bagikan <ArrowUpRight size={15} /></button><button className="outline-button" data-testid="download-pdf-button" onClick={() => window.open(putusanPdfUrl(document.id, false), "_blank")}><Download size={16} /> Unduh PDF</button>{document.file_id && <button className="outline-button" data-testid="download-original-button" onClick={() => downloadOriginal(document.file_id, document.original_filename)}><Download size={16} /> Unduh file asli</button>}</div></div>
         <div className="meta-grid" data-testid="document-metadata"><div><span>JENIS SENGKETA</span><strong>{document.case_type}</strong></div><div><span>JENIS PAJAK</span><strong>{document.tax_type}</strong></div><div><span>BADAN PERADILAN</span><strong>{document.court}</strong></div><div><span>MAJELIS</span><strong>{document.panel}</strong></div></div>
         <div className="reader-toolbar"><span className="reader-label"><span className="status-dot" /> Dokumen terverifikasi</span><div className="doc-tabs" data-testid="doc-tabs"><button className={`doc-tab ${docTab === "teks" ? "active" : ""}`} data-testid="doc-tab-teks" onClick={() => setDocTab("teks")}><BookOpen size={14} /> Teks terformat</button><button className={`doc-tab ${docTab === "pdf" ? "active" : ""}`} data-testid="doc-tab-pdf" onClick={() => setDocTab("pdf")}><FileText size={14} /> {document.file_id && isPdfFile(document.original_filename) ? "PDF Asli" : "PDF"}</button></div><button className="icon-button" data-testid="search-document-button" title="Cari putusan lain" onClick={openSearchQuick}><Search size={17} /></button></div>
         {docTab === "pdf"

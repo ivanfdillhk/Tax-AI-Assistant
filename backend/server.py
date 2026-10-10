@@ -281,9 +281,23 @@ def infer_metadata(filename: str, content: str):
     if panel: meta["panel"] = panel
     return meta
 
+def _make_summary(content: str, limit: int = 420) -> str:
+    """Readable summary that ends at a sentence boundary (or word boundary + ellipsis)."""
+    text = re.sub(r"\[/?TABLE\]", " ", content or "")
+    text = re.sub(r"\b(?:[A-Z] ){2,}[A-Z]\b", lambda m: m.group(0).replace(" ", ""), text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    stop = max(cut.rfind(". "), cut.rfind("; "))
+    if stop > 160:
+        return cut[: stop + 1]
+    return cut[: cut.rfind(" ")].rstrip(",;:") + "…"
+
+
 def document_from_text(filename: str, content: str, source_url: str):
     metadata = infer_metadata(filename, content)
-    return {**SAMPLE_PUTUSAN, "id": str(uuid.uuid4()), "slug": str(uuid.uuid4()), **metadata, "summary": content[:280].replace("\n", " "), "body": content[:2000000], "source_url": source_url, "created_at": datetime.now(timezone.utc).isoformat()}
+    return {**SAMPLE_PUTUSAN, "id": str(uuid.uuid4()), "slug": str(uuid.uuid4()), **metadata, "summary": _make_summary(content), "body": content[:2000000], "source_url": source_url, "created_at": datetime.now(timezone.utc).isoformat()}
 
 async def sync_putusan_library():
     """Sync PDF baru dari pdf_library/putusan ke db.putusan."""
