@@ -1,0 +1,51 @@
+{
+  "summary": "Partial verification of search quality improvements. Verified: web_search cache (page=2 after page=1 is instant), no-asterisk/no-#-heading rules in code, and ai_search sources['cited'] + 'Sumber terkait lainnya' label in UI. BLOCKER: EMERGENT_LLM_KEY budget is EXCEEDED ($1.0000466 / Max $1.00) — all new LLM-dependent search endpoints return 502 'Budget has been exceeded!'. Cached queries from the previous iteration still return 200 but freshly-triggered web/ai searches fail.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "/api/ai-search & /api/search", "issue": "LLM budget exceeded on EMERGENT_LLM_KEY (litellm.RateLimitError: Budget has been exceeded! Key=db4r3sin4duc73algavg Current cost: 1.0000466, Max budget: 1.0). Any uncached query returns 502. BLOCKS verification of new 15+ web sources and ≥6 AI sources.", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "/api/search 502", "issue": "On LLM failure endpoint returns 502 which gets masked by preview edge as HTML 'Bad gateway' page. Consider returning 503 with JSON for clearer client handling."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_results": {
+    "backend_executed": {
+      "test_pajak_natura_web_search": "PASS (cached) — total>=1, no '*' in snippets",
+      "test_web_search_status_and_total (q=PPN TBS sawit)": "PASS first run (cached from previous iter), 15 results confirmed; FAIL on re-run after cache miss (502 budget)",
+      "test_web_results_no_asterisk": "PASS when payload available (cache hit)",
+      "test_web_results_structure": "PASS",
+      "test_web_page2_is_cached_fast": "PASS on cache-warm attempts (page2 served from _CACHE in <2s). FAIL only when page1 fixture had to re-fetch and 502'd.",
+      "test_ai_* (all 5)": "FAIL — POST /api/ai-search returns 502 due to LLM key budget exhausted"
+    }
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_search_quality.py",
+    "/app/test_reports/pytest/search_quality.xml"
+  ],
+  "code_review_findings": [
+    "web_search.py clean_markdown() correctly strips '*', '**', headings '#', and backticks — regex looks solid.",
+    "_fix_marker_positions() shifts leading [n] markers to end of previous line via idempotent regex loop — correct.",
+    "ai_search uses 3 sequential calls (1 main + 2 supplementary) and dedupes by resolved final URL, flagging cited=true for in-text sources and cited=false for supplementary. UI consumes this correctly in App.js L591-595 (filter by cited, with ai-related-sources-label).",
+    "web_search prompts now ask for 'minimal 15 sumber' and run 3 calls (main + regulation-focused + news/analysis-focused). Merging/dedup logic uses priority sort — looks correct.",
+    "Cache TTL 600s with key=(kind, query.lower()) — pagination hits same cache key, so page=2 is served from memory. Verified.",
+    "renderAiAnswer in App.js L185-198 strips remaining '*' and leading '#' client-side as a double-safety net — good.",
+    "Potential issue: when all three LLM calls fail (e.g., budget error), ai_search raises, endpoint returns 502. Error surface could be more descriptive (budget vs other failures).",
+    "Minor: _grounded_call retries only on 'concurrent' or '429' + no 'budget' substring, which correctly bypasses retry on budget errors — good."
+  ],
+  "action_items": [
+    "TOP-UP or ROTATE EMERGENT_LLM_KEY — current key has exhausted its $1.00 budget. Until replenished, no fresh web/ai search queries can be served.",
+    "After key refresh, re-run `pytest /app/backend/tests/test_search_quality.py -n 0 -s` to validate: (a) web total>=15 for 'PPN TBS sawit', (b) ai sources>=6 for 'Apakah STP bisa dibatalkan?', (c) page=2 cache <2s.",
+    "Consider mapping budget RateLimitError to HTTP 503 with explicit JSON detail so UI can show 'Kuota AI habis' instead of generic 'Pencarian web gagal'."
+  ],
+  "critical_code_review_comments": [
+    "ai_search endpoint masks the budget error as 502 'AI Search gagal'. Adding specific handling for 'budget' in error message to raise 503 with distinct detail would help operators & UI."
+  ],
+  "updated_files": ["/app/backend/tests/test_search_quality.py"],
+  "success_rate": {"backend": "40% (blocked by LLM budget)", "frontend": "not tested — depends on backend"},
+  "seed_data_creation": "none",
+  "retest_needed": true,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "LLM key budget was exhausted during iteration_4. Previously-cached queries (q=PPN, q=pajak natura) still return 200 from in-memory cache for ~10 min. Once key is refreshed, run `pytest /app/backend/tests/test_search_quality.py -n 0 -s` sequentially (-n 0 is REQUIRED; the pytest.ini default is -n 2 which triggers parallel LLM calls → 429 concurrent). Test file verifies: web total>=10 (ideally 15+), no '*' in snippets, page=2 cache <3s, AI sources have 'cited' bool field, AI answer has no '*' nor '#'/'[n]' at line start.",
+  "rca of the issue": "RCA: 502 from /api/ai-search and /api/search is caused by EMERGENT_LLM_KEY exceeding its budget. Backend err log: 'litellm.RateLimitError: Budget has been exceeded! Current cost: 1.0000466, Max budget: 1.0'. web_search._sequential_calls propagates this exception on the mandatory first call → endpoint catches generic Exception and raises HTTPException(502). Reproduction: POST /api/ai-search {q:'anything new'} — returns 502 in ~1.5s. Mitigation: top up or rotate the EMERGENT_LLM_KEY. Code mitigation: special-case 'budget' in error message to return a dedicated 503 with user-friendly detail."
+}

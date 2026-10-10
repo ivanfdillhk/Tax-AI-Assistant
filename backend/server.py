@@ -1793,6 +1793,19 @@ class AiSearchRequest(BaseModel):
     q: str
 
 
+_QUOTA_MSG = "Saldo/kuota AI (Universal Key) habis. Tambahkan saldo di Profile → Universal Key, lalu coba lagi."
+_BUSY_MSG = "Layanan AI sedang memproses permintaan lain. Tunggu beberapa detik lalu coba lagi."
+
+
+def _search_error(exc: Exception, default_msg: str) -> HTTPException:
+    msg = str(exc).lower()
+    if "budget" in msg:
+        return HTTPException(status_code=429, detail=_QUOTA_MSG)
+    if "concurrent" in msg:
+        return HTTPException(status_code=429, detail=_BUSY_MSG)
+    return HTTPException(status_code=502, detail=default_msg)
+
+
 @api_router.get("/search")
 async def web_search_endpoint(
     q: str = Query(..., min_length=1, max_length=400),
@@ -1809,7 +1822,7 @@ async def web_search_endpoint(
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
         logger.exception("web search failed")
-        raise HTTPException(status_code=502, detail="Pencarian web gagal. Coba lagi.")
+        raise _search_error(exc, "Pencarian web gagal. Coba lagi.")
     all_results = data["results"]
     total = len(all_results)
     start = (page - 1) * page_size
@@ -1841,7 +1854,7 @@ async def ai_search_endpoint(payload: AiSearchRequest):
         raise HTTPException(status_code=503, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
         logger.exception("ai search failed")
-        raise HTTPException(status_code=502, detail="AI Search gagal. Coba lagi.")
+        raise _search_error(exc, "AI Search gagal. Coba lagi.")
     return {
         "query": question,
         "answer": data["answer"],

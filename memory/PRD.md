@@ -56,3 +56,11 @@ Import the `Tax-AI-Assistant` repo (FastAPI + MongoDB + React) from GitHub into 
 - Backend/frontend running; DB seeded; PDF upload OK.
 - Web search & AI Search return 502: EMERGENT_LLM_KEY budget exceeded (not a code bug) — user must top up Universal Key balance.
 - FIX: root cause was a stale EMERGENT_LLM_KEY in backend/.env (from the old project, $2 budget used up). Replaced it with the current Universal Key → /api/search and /api/ai-search return 200. Testing agent iteration_3: 100% backend + frontend.
+
+## Update (2026-10) — more sources + no asterisks
+- web_search.py: `clean_markdown()` strips */**/#/backticks (bullets → "•"); `_fix_marker_positions()` moves [n] markers off line starts; prompts ask for plain text.
+- More sources: web = 3 sequential grounded calls (general / regulation / news-analysis), merged + deduped (8 → ~21 results); AI = main answer + 2 supplementary source calls → sources have `cited` bool; UI shows "Sumber (N)" + "Sumber terkait lainnya".
+- Key plan forbids parallel LLM requests (429 concurrent_request_limit) → `_sequential_calls` with 32s time budget; retry on concurrency 429.
+- 10-min in-memory cache for web search (pagination instant).
+- Budget/concurrency errors → HTTP 429 with clear Indonesian message.
+- NOTE: each search now costs up to ~3 LLM calls. Key budget ($1) exhausted during iteration_4 → full re-verification pending top-up. Run `pytest backend/tests/test_search_quality.py -n 0` (sequential!).
