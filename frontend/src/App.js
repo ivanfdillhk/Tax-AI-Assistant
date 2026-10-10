@@ -194,9 +194,17 @@ const Home = () => {
       }
       const bold = part.match(/^\*\*([^*]+)\*\*$/);
       if (bold) return <strong key={i}>{bold[1]}</strong>;
-      return <span key={i}>{part}</span>;
+      return <span key={i}>{part.replace(/\*/g, "").replace(/^[ \t]*#{1,6}[ \t]*/gm, "")}</span>;
     });
   };
+  const renderAiSource = (s) => (
+    <a className="ai-source" href={s.url} target="_blank" rel="noreferrer" data-testid={`ai-source-${s.number}`} key={s.number}>
+      <span className="ai-source-num">{s.number}</span>
+      {s.favicon ? <img className="web-favicon" src={s.favicon} alt="" onError={(e) => { e.currentTarget.style.display = "none"; }} /> : null}
+      <span className="ai-source-text"><strong>{s.title}</strong><span>{s.displayUrl}</span></span>
+      <ArrowUpRight size={14} />
+    </a>
+  );
   const goToKnowledge = () => { setView("knowledge"); setSearchOpen(false); setPeraturanOpen(false); };
   const loadDatabase = async (filterOverride, queryOverride) => {
     const f = filterOverride || filters;
@@ -566,7 +574,7 @@ const Home = () => {
                 <span className="web-display-url">{r.displayUrl}</span>
               </div>
               <a className="web-title" href={r.url} target="_blank" rel="noreferrer" data-testid={`web-result-link-${r.rank}`}>{r.title}</a>
-              {r.snippet ? <p className="web-snippet">{r.snippet}</p> : null}
+              {r.snippet ? <p className="web-snippet">{r.snippet.replace(/\*/g, "")}</p> : null}
               <a className="web-open" href={r.url} target="_blank" rel="noreferrer" data-testid={`web-open-${r.rank}`}><ArrowUpRight size={13} /> Open Source</a>
             </div>
           ))}
@@ -581,15 +589,10 @@ const Home = () => {
         <div className="ai-result-head"><Sparkles size={15} /> Jawaban AI <span className="ai-time">({aiData.searchTime} detik)</span></div>
         <div className="ai-answer" data-testid="ai-answer">{renderAiAnswer(aiData.answer, aiData.sources)}</div>
         {aiData.sources.length > 0 && <div className="ai-sources" data-testid="ai-sources">
-          <div className="ai-sources-label">Sumber</div>
-          {aiData.sources.map((s) => (
-            <a className="ai-source" href={s.url} target="_blank" rel="noreferrer" data-testid={`ai-source-${s.number}`} key={s.number}>
-              <span className="ai-source-num">{s.number}</span>
-              {s.favicon ? <img className="web-favicon" src={s.favicon} alt="" onError={(e) => { e.currentTarget.style.display = "none"; }} /> : null}
-              <span className="ai-source-text"><strong>{s.title}</strong><span>{s.displayUrl}</span></span>
-              <ArrowUpRight size={14} />
-            </a>
-          ))}
+          <div className="ai-sources-label">Sumber ({aiData.sources.length})</div>
+          {aiData.sources.filter((s) => s.cited !== false).map(renderAiSource)}
+          {aiData.sources.some((s) => s.cited === false) && <div className="ai-sources-label ai-sources-sub" data-testid="ai-related-sources-label">Sumber terkait lainnya</div>}
+          {aiData.sources.filter((s) => s.cited === false).map(renderAiSource)}
         </div>}
         <div className="ai-disclaimer">Jawaban AI dapat keliru — selalu verifikasi ke sumber asli di atas.</div>
       </div>}

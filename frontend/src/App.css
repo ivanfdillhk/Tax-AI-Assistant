@@ -205,3 +205,4 @@
 .peraturan-delete-detail:hover { background:#fef2f2 !important; color:#dc2626 !important; border-color:#fecaca !important; }
 .db-delete-btn:hover { background:#dc2626 !important; color:#fff !important; border-color:#dc2626 !important; }
 @media (max-width:560px) { .pdf-viewer iframe { height:70vh; } .doc-tabs { margin-left:0; } .reader-toolbar { flex-wrap:wrap; gap:10px; } }
+.ai-sources-sub { margin-top:14px; }

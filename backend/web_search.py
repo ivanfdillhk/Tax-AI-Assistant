@@ -9,6 +9,7 @@ import os
 import re
 import uuid
 import asyncio
+import time
 import logging
 from urllib.parse import urlparse
 
@@ -71,6 +72,48 @@ def _good_title(title: str) -> bool:
     return True
 
 
+_PLAIN_RULE = (
+    " Tulis dalam teks biasa TANPA format markdown: jangan gunakan tanda bintang (*), "
+    "garis bawah ganda, atau tanda pagar (#). Untuk daftar gunakan simbol '•' di awal baris."
+)
+
+
+def clean_markdown(text: str) -> str:
+    """Strip markdown artefacts (asterisks, headings, backticks) from LLM text."""
+    if not text:
+        return ""
+    t = text.replace("\r\n", "\n")
+    t = re.sub(r"`+", "", t)
+    t = re.sub(r"(?m)^[ \t]{0,3}#{1,6}[ \t]*", "", t)
+    t = re.sub(r"(?m)^([ \t]*)[*+\-][ \t]+", r"\1• ", t)
+    t = t.replace("**", "").replace("__", "")
+    t = t.replace("*", "")
+    t = re.sub(r"•[ \t]+", "• ", t)
+    t = re.sub(r"[ \t]+\n", "\n", t)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
+
+
+_CACHE = {}
+_CACHE_TTL = 600  # seconds
+_CACHE_MAX = 100
+
+
+def _cache_get(key):
+    hit = _CACHE.get(key)
+    if hit and (time.time() - hit[0]) < _CACHE_TTL:
+        return hit[1]
+    _CACHE.pop(key, None)
+    return None
+
+
+def _cache_set(key, value):
+    if len(_CACHE) >= _CACHE_MAX:
+        oldest = min(_CACHE, key=lambda k: _CACHE[k][0])
+        _CACHE.pop(oldest, None)
+    _CACHE[key] = (time.time(), value)
+
+
 async def _grounded_call(system_message: str, user_text: str, session_prefix: str):
     """Call Gemini with Google Search grounding. Returns (content, annotations)."""
     key = os.environ.get("EMERGENT_LLM_KEY")
@@ -81,7 +124,17 @@ async def _grounded_call(system_message: str, user_text: str, session_prefix: st
         .with_model("gemini", GEMINI_MODEL)
         .with_tools([{"googleSearch": {}}])
     )
-    resp = await chat.send_message_with_tools(UserMessage(text=user_text))
+    resp = None
+    for attempt in range(3):
+        try:
+            resp = await chat.send_message_with_tools(UserMessage(text=user_text))
+            break
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc).lower()
+            if attempt < 2 and ("concurrent" in msg or "429" in msg) and "budget" not in msg:
+                await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            raise
     content = resp.content or ""
     raw = resp.raw
     try:
@@ -97,6 +150,43 @@ async def _grounded_call(system_message: str, user_text: str, session_prefix: st
     except Exception:
         annotations = []
     return content, annotations
+
+
+# The LLM key plan may not allow parallel requests, so supplementary calls run
+# sequentially within a total time budget (keeps us under the ~60s gateway timeout).
+SEARCH_TIME_BUDGET = 32.0
+MIN_CALL_WINDOW = 9.0
+
+
+async def _sequential_calls(specs, budget: float = SEARCH_TIME_BUDGET):
+    """specs: list of (system, user_text, prefix). First call is mandatory (errors raise);
+    later calls run only while time budget remains, failures are skipped."""
+    started = time.perf_counter()
+    results = []
+    for idx, (system, user_text, prefix) in enumerate(specs):
+        if idx == 0:
+            results.append(await _grounded_call(system, user_text, prefix))
+            continue
+        remaining = budget - (time.perf_counter() - started)
+        if remaining < MIN_CALL_WINDOW:
+            logger.info("search budget exhausted; skipped %d supplementary call(s)", len(specs) - idx)
+            break
+        try:
+            results.append(await asyncio.wait_for(_grounded_call(system, user_text, prefix), timeout=remaining))
+        except Exception as exc:  # noqa: BLE001
+            logger.info("supplementary search call skipped: %s", str(exc)[:200])
+    return results
+
+
+def _fix_marker_positions(text: str) -> str:
+    """Move citation markers that landed at the start of a line back to the end of the previous line."""
+    if not text:
+        return text
+    prev = None
+    while prev != text:
+        prev = text
+        text = re.sub(r"\n([ \t]*(?:•[ \t]*)?)((?:\[\d+\])+)", r"\2\n\1", text)
+    return text
 
 
 def _ordered_unique_citations(annotations):
@@ -171,7 +261,7 @@ async def _resolve_all(redirect_urls):
 def _snippet_from_content(content: str, start: int, end: int, fallback: str = "") -> str:
     try:
         if content and 0 <= start < end <= len(content):
-            seg = content[start:end].strip()
+            seg = clean_markdown(content[start:end]).replace("•", "").strip()
             seg = re.sub(r"\s+", " ", seg)
             if len(seg) > 320:
                 seg = seg[:317].rstrip() + "…"
@@ -259,15 +349,49 @@ async def web_search(query: str, kind: str = "web"):
             "peraturan.bpk.go.id, mahkamahagung.go.id) — tetapi JANGAN membatasi hanya ke situs itu; "
             "sertakan juga berita, jurnal, konsultan, perusahaan, dan situs umum yang relevan. "
             "Untuk SETIAP halaman relevan, tulis satu kalimat ringkas tentang isinya dan SITASI sumbernya. "
-            "Sertakan minimal 10 sumber berbeda bila tersedia. Jangan pernah mengarang URL."
+            "Sertakan minimal 15 sumber berbeda bila tersedia. Jangan pernah mengarang URL."
         )
         user = query
 
-    content, annotations = await _grounded_call(system, user, "tlx-web")
-    citations = _ordered_unique_citations(annotations)
-    resolved = await _resolve_all([c["url"] for c in citations])
-    results = _build_results(content, citations, resolved, apply_priority=True)
-    return {"overview": content, "results": results}
+    if kind == "news":
+        users = [user, f"Perkembangan dan analisis terkini seputar: {query}"]
+    elif kind == "pdf":
+        users = [user, f"{query} filetype:pdf dokumen resmi atau makalah"]
+    else:
+        users = [
+            user,
+            f"{query} — peraturan resmi, penjelasan otoritas, dan putusan terkait",
+            f"{query} — artikel, berita, analisis konsultan, dan pembahasan praktis",
+        ]
+
+    cache_key = (kind, query.strip().lower())
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    ok = await _sequential_calls([(system + _PLAIN_RULE, u, "tlx-web") for u in users])
+
+    per_call = [(content, _ordered_unique_citations(ann)) for content, ann in ok]
+    resolved = await _resolve_all([c["url"] for _, cits in per_call for c in cits])
+
+    merged = []
+    seen_final = set()
+    for call_idx, (content, cits) in enumerate(per_call):
+        for r in _build_results(content, cits, resolved, apply_priority=False):
+            if r["url"] in seen_final:
+                continue
+            seen_final.add(r["url"])
+            r["_key"] = (r["rank"], call_idx)
+            merged.append(r)
+    merged.sort(key=lambda r: (_priority_rank(r["source"]), r["_key"]))
+    for i, r in enumerate(merged):
+        r["rank"] = i + 1
+        r.pop("_key", None)
+
+    data = {"overview": clean_markdown(ok[0][0]), "results": merged}
+    if merged:
+        _cache_set(cache_key, data)
+    return data
 
 
 async def ai_search(question: str):
@@ -280,10 +404,24 @@ async def ai_search(question: str):
         "Jika kueri terkait pajak Indonesia, utamakan sumber resmi (pajak.go.id, jdih.kemenkeu.go.id, "
         "peraturan.bpk.go.id, mahkamahagung.go.id), namun jangan membatasi. Jangan mengarang fakta atau URL. "
         "Jika informasi tidak ditemukan, katakan dengan jujur."
-    )
-    content, annotations = await _grounded_call(system, question, "tlx-ai")
+    ) + _PLAIN_RULE
+    extra_system = (
+        "Anda adalah mesin pencari sumber TaxLens. Gunakan Google Search untuk menemukan sebanyak "
+        "mungkin halaman berbeda yang relevan dan tepercaya untuk pertanyaan pengguna (minimal 8 bila tersedia): "
+        "peraturan resmi, situs pemerintah, artikel, berita, dan analisis konsultan. Untuk setiap halaman "
+        "tulis satu kalimat ringkas dan SITASI sumbernya. Jangan mengarang URL."
+    ) + _PLAIN_RULE
+    calls = await _sequential_calls([
+        (system, question, "tlx-ai"),
+        (extra_system, question, "tlx-ai-src"),
+        (extra_system, f"{question} — dasar hukum dan peraturan resmi terkait", "tlx-ai-src"),
+    ])
+    content, annotations = calls[0]
+    extra_citations = []
+    for c in calls[1:]:
+        extra_citations.extend(_ordered_unique_citations(c[1]))
     citations = _ordered_unique_citations(annotations)
-    resolved = await _resolve_all([c["url"] for c in citations])
+    resolved = await _resolve_all([c["url"] for c in citations] + [c["url"] for c in extra_citations])
 
     # Map each redirect url -> final url, then number by unique FINAL url (first appearance)
     redirect_to_final = {c["url"]: resolved.get(c["url"], (c["url"], None))[0] for c in citations}
@@ -310,6 +448,33 @@ async def ai_search(question: str):
                 "displayUrl": display,
                 "source": domain,
                 "favicon": _favicon(domain),
+                "cited": True,
+            }
+        )
+
+    # Supplementary (related) sources, numbered after the cited ones
+    for c in extra_citations:
+        final_url, page_title = resolved.get(c["url"], (c["url"], None))
+        if final_url in final_to_num:
+            continue
+        num = len(final_to_num) + 1
+        final_to_num[final_url] = num
+        domain, display = _resolve_display(final_url, c["title"])
+        if _good_title(page_title):
+            title = page_title
+        elif c["title"]:
+            title = c["title"]
+        else:
+            title = domain or "Sumber"
+        sources.append(
+            {
+                "number": num,
+                "title": title,
+                "url": final_url,
+                "displayUrl": display,
+                "source": domain,
+                "favicon": _favicon(domain),
+                "cited": False,
             }
         )
 
@@ -335,4 +500,4 @@ async def ai_search(question: str):
         tag = "".join(f"[{n}]" for n in sorted(markers[end]))
         answer = answer[:end] + tag + answer[end:]
 
-    return {"answer": answer, "sources": sources}
+    return {"answer": _fix_marker_positions(clean_markdown(answer)), "sources": sources}
