@@ -76,23 +76,56 @@ const collapseSpacedCaps = (t) => t.replace(/\b(?:[A-Z] ){2,}[A-Z]\b/g, (m) => m
 const endsBlock = (t) => /[.;:!?]["\u201d\u2019')]*$/.test(t.trim());
 const OPENER_RE = /^(Telah\s+(membaca|mendengar|memeriksa)|Menimbang|Mengingat|Memperhatikan|Menetapkan|Memutuskan|Mengadili|Demikian\s+diputus|Dengan\s+demikian)/;
 
+const BARE_MARKER_RE = /^(\(?\d{1,3}[.)]|\(?[a-zA-Z][.)]|[-•–])$/;
+const INVISIBLE_RE = /[\u200b-\u200d\u2060\ufeff\u00ad]/g;
+const cleanInvisible = (t) => (t || "").replace(INVISIBLE_RE, "");
+// Re-insert spaces in web-scraped text where words were glued together (e.g. "PutusanPokok SengketaUpaya").
+const deglue = (t) => {
+  if (((t.match(/[a-z]{3,}[A-Z][a-z]/g) || []).length) < 2) return t;
+  return t
+    .replace(/([a-z]{3,})([A-Z][a-z])/g, "$1 $2")
+    .replace(/([A-Z]{2,})([A-Z][a-z]{2,})/g, "$1 $2")
+    .replace(/([a-z]{3,})(\d)/g, "$1 $2")
+    .replace(/(\d{4})([A-Z][a-zA-Z])/g, "$1 $2")
+    .replace(/([a-z]{3,})([A-Z]{2,}|[A-Z](?=\s))/g, "$1 $2")
+    .replace(/:(?=[A-Za-z])/g, ": ")
+    .replace(/\)([A-Z])/g, ") $1")
+    .replace(/\s*\|\s*/g, " | ")
+    // "… | 31/12/19832Keputusan" → date, newline, "2. Keputusan" (numbered related-regulation lists)
+    .replace(/\| (\d{2}\/\d{2}\/\d{4})(\d{1,2}) ?(?=[A-Z])/g, "| $1\n$2. ")
+    .replace(/(Terkait(?: \(\d+\))?) ?(\d{1,2}) ?(?=[A-Z][a-z])/g, "$1\n$2. ")
+    .replace(/(\d{2}\/\d{2}\/\d{4}) (?=[A-Z][a-z]+ [A-Z][a-z]+$)/, "$1\n");
+};
+const markerLevel = (m) => (/^[-•–]/.test(m) ? 2 : 1);
+
 const groupBodyLines = (chunk) => {
   const blocks = []; let current = null; let pendingGap = false;
   const flush = () => { if (current) { blocks.push(current); current = null; } };
   chunk.split("\n").forEach((raw) => {
     const line = raw.trim();
     if (!line) { pendingGap = true; return; }
-    if (isHeadingLine(line)) { flush(); blocks.push({ type: "heading", lines: [line] }); pendingGap = false; return; }
-    const isField = FIELD_RE.test(line);
-    const isList = LIST_START_RE.test(line);
-    const prev = current?.lines[current.lines.length - 1] || "";
-    const isOpener = OPENER_RE.test(line);
-    const continuesPara = current && current.type === "para" && !isField && !isList && !isOpener && !endsBlock(prev)
-      && (!pendingGap || /^[a-z0-9(]/.test(line));
+    const visible = cleanInvisible(line).trim();
+    // invisible-only line: keep it (for paragraph numbering) inside the current block
+    if (!visible) { if (current) current.lines.push(line); else blocks.push({ type: "ghost", lines: [line] }); return; }
+    if (isHeadingLine(visible)) { flush(); blocks.push({ type: "heading", lines: [line] }); pendingGap = false; return; }
+    const isBare = BARE_MARKER_RE.test(visible);
+    const isField = FIELD_RE.test(visible);
+    const isList = LIST_START_RE.test(visible);
+    const isOpener = OPENER_RE.test(visible);
+    const prev = cleanInvisible(current?.lines[current.lines.length - 1] || "").trim();
+    if (visible.length <= 45 && /:$/.test(visible) && !FIELD_RE.test(visible) && /^[A-Z]/.test(visible) && !(current && current.type === "item" && current.bare && current.lines.length === 1)) {
+      flush(); blocks.push({ type: "label", lines: [line] }); pendingGap = false; return;
+    }
+    if (isBare) { flush(); current = { type: "item", level: markerLevel(visible), bare: true, lines: [line] }; pendingGap = false; return; }
+    if (isList) { flush(); current = { type: "item", level: markerLevel(visible), lines: [line] }; pendingGap = false; return; }
+    const freshItem = current && current.type === "item" && current.bare && current.lines.length === 1;
+    const softBreakOk = !isField && !isOpener && !endsBlock(prev) && (!pendingGap || /^[a-z0-9(]/.test(visible));
+    const continuesPara = current && current.type === "para" && softBreakOk;
+    const continuesItem = current && current.type === "item" && (freshItem || softBreakOk);
     const fieldKey = current?.type === "field" ? current.lines[0].split(":")[0] : "";
-    const continuesField = current && current.type === "field" && !isField && !isList && !isOpener && /,$/.test(prev)
-      && (/^[a-z0-9(]/.test(line) || (/alamat/i.test(fieldKey) && !/\btersebut\b/i.test(line)));
-    if (continuesPara || continuesField) current.lines.push(line);
+    const continuesField = current && current.type === "field" && !isField && !isOpener && /,$/.test(prev)
+      && (/^[a-z0-9(]/.test(visible) || (/alamat/i.test(fieldKey) && !/\btersebut\b/i.test(visible)));
+    if (continuesPara || continuesItem || continuesField) current.lines.push(line);
     else { flush(); current = { type: isField ? "field" : "para", lines: [line] }; }
     pendingGap = false;
   });
@@ -102,24 +135,31 @@ const groupBodyLines = (chunk) => {
 
 const renderReflowedText = (chunk, withIds, state) => groupBodyLines(chunk).map((block) => {
   state.key += 1;
+  let prevShown = "";
   const parts = block.lines.map((line, i) => {
-    const prev = i > 0 ? block.lines[i - 1] : "";
-    const sep = i === 0 ? "" : (prev.endsWith("-") ? "" : " ");
-    const shown = block.type === "heading" ? collapseSpacedCaps(line) : line;
+    let shown = deglue(cleanInvisible(line).trim());
+    if (block.type === "heading") shown = collapseSpacedCaps(shown);
+    const isMarker = block.type === "item" && block.bare && i === 0;
+    const sep = i === 0 || !shown ? "" : (prevShown.endsWith("-") && !(block.bare && i === 1) ? "" : " ");
+    if (shown) prevShown = shown;
+    const cls = isMarker ? "doc-line doc-marker" : "doc-line";
     if (withIds) {
       state.counter += 1; const pid = `P${state.counter}`;
-      return <span key={pid}>{sep}<span className="doc-line" id={`paragraph-${pid}`} data-testid={`document-paragraph-${pid}`}>{shown}</span></span>;
+      return <span key={pid}>{sep}<span className={cls} id={`paragraph-${pid}`} data-testid={`document-paragraph-${pid}`}>{shown}</span></span>;
     }
-    return <span key={i}>{sep}{shown}</span>;
+    return <span key={i}>{sep}{isMarker ? <span className="doc-marker">{shown}</span> : shown}</span>;
   });
+  if (block.type === "ghost") return <span key={`x${state.key}`} hidden>{parts}</span>;
   if (block.type === "heading") return <h4 className="doc-heading" key={`h${state.key}`}>{parts}</h4>;
+  if (block.type === "label") return <p className="doc-label" key={`l${state.key}`}>{parts}</p>;
   if (block.type === "field") return <p className="doc-field" key={`f${state.key}`}>{parts}</p>;
+  if (block.type === "item") return <p className={`doc-item doc-item-l${block.level}`} key={`i${state.key}`}>{parts}</p>;
   return <p className="doc-para" key={`p${state.key}`}>{parts}</p>;
 });
 
 /* ---------- Lede: a clean, complete-sentence summary ---------- */
 const cleanLede = (summary, body) => {
-  const norm = (t) => collapseSpacedCaps((t || "").replace(/\[\/?TABLE\]/g, " ").replace(/\s+/g, " ").trim());
+  const norm = (t) => deglue(collapseSpacedCaps(cleanInvisible(t).replace(/\[\/?TABLE\]/g, " ").replace(/\s+/g, " ").trim()));
   const s = norm(summary);
   if (s && /[.!?…]$/.test(s) && s.length <= 480) return s;
   const src = norm(body) || s;

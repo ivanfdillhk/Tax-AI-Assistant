@@ -226,3 +226,15 @@
 .compare-body p.doc-para, .peraturan-body p.doc-para { text-align:left; margin:0 0 12px; }
 .compare-body h4.doc-heading, .peraturan-body h4.doc-heading { font-size:13px; letter-spacing:.06em; text-align:center; margin:18px 0 10px; }
 .compare-body p.doc-field, .peraturan-body p.doc-field { margin:0 0 4px; }
+.document-body p.doc-item { margin:0 auto 8px; text-align:left; padding-left:1.9em; text-indent:-1.3em; }
+.document-body p.doc-item-l2 { padding-left:3.4em; }
+.document-body .doc-marker { display:inline-block; min-width:1.3em; font-weight:600; color:#334155; text-indent:0; }
+.document-body p.doc-para + p.doc-item, .document-body p.doc-field + p.doc-item { margin-top:-4px; }
+.document-body p.doc-item + p.doc-para { margin-top:14px; }
+.compare-body p.doc-item, .peraturan-body p.doc-item { margin:0 0 6px; padding-left:1.6em; text-indent:-1.1em; }
+.compare-body p.doc-item-l2, .peraturan-body p.doc-item-l2 { padding-left:2.8em; }
+.compare-body .doc-marker, .peraturan-body .doc-marker { display:inline-block; min-width:1.1em; font-weight:600; }
+
+.document-body .doc-line, .compare-body span, .peraturan-body span { white-space:pre-line; }
+.document-body p.doc-label { margin:20px auto 8px; font-weight:700; color:#0f172a; }
+.compare-body p.doc-label, .peraturan-body p.doc-label { margin:12px 0 6px; font-weight:700; }
