@@ -55,3 +55,4 @@ Import the `Tax-AI-Assistant` repo (FastAPI + MongoDB + React) from GitHub into 
 - Re-imported repo (main) — /app code identical to repo. Backend deps installed (rest of requirements separately; litellm 1.80.0 + emergentintegrations 0.2.2 present). Frontend `yarn install` OK (cleared corrupt es-abstract yarn cache).
 - Backend/frontend running; DB seeded; PDF upload OK.
 - Web search & AI Search return 502: EMERGENT_LLM_KEY budget exceeded (not a code bug) — user must top up Universal Key balance.
+- FIX: root cause was a stale EMERGENT_LLM_KEY in backend/.env (from the old project, $2 budget used up). Replaced it with the current Universal Key → /api/search and /api/ai-search return 200. Testing agent iteration_3: 100% backend + frontend.
