@@ -1,0 +1,21 @@
+{
+  "summary": "Verified automatic case_type detection on upload (Banding vs Peninjauan Kembali). Backend: 5/5 pytest passed covering (1) PK PDF from Mahkamah Agung -> case_type 'Peninjauan Kembali', title '1234 B/PK/PJK/2024', year 2024, tax_type PPN; (2) Banding PDF (Pengadilan Pajak header) -> 'Putusan Banding'; (3) Banding .txt that MENTIONS 'peninjauan kembali ke Mahkamah Agung' as closing remark -> still 'Putusan Banding' (no false PK positive); (4) generic .txt without signals -> 'Putusan Banding' (NOT 'Putusan Pajak'); (5) GET /api/putusan contains no case_type outside the two allowed values (migration at startup worked). UI: opened a putusan detail page, uploaded test_pk_putusan.pdf via document-upload-input, confirmed title displays '1234 B/PK/PJK/2024', then on Tax Database the db-filter-case-type dropdown shows PK upload only under 'Peninjauan Kembali' and hides it under 'Putusan Banding'. All uploaded PK records cleaned via DELETE /api/putusan/{id}; final remaining PK count = 0.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_case_type_detection.py",
+    "/app/test_reports/pytest/case_type_detection.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "_extract_case_type correctly prioritizes strong structural PK signals (B/PK/PJK, pemohon/termohon peninjauan kembali, filename hints) and only falls back to PK when 'Mahkamah Agung' precedes 'Pengadilan Pajak' AND 'peninjauan kembali' is present in the head — this prevents false positives from Banding decisions that merely cite the right to appeal to MA.",
+    "Default classification is 'Putusan Banding' (never 'Putusan Pajak'), aligning with the two-value product contract.",
+    "Startup migration in seed_peraturan reclassifies any legacy putusan with case_type outside {Putusan Banding, Peninjauan Kembali} using _extract_case_type on stored body — verified no stray values remain in GET /api/putusan."
+  ],
+  "updated_files": ["/app/backend/tests/test_case_type_detection.py"],
+  "success_rate": {"backend": "100% (5/5)", "frontend": "100%"},
+  "seed_data_creation": "None. Test-created PK putusan was deleted via DELETE /api/putusan/{id}; final remaining PK = 0.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Auto case-type detection is covered by /app/backend/tests/test_case_type_detection.py. The classifier guards against false PK positives when Banding texts mention PK-rights in their closing paragraph. Default fallback is 'Putusan Banding'. Filter dropdown db-filter-case-type exposes only the two canonical values and filters correctly end-to-end."
+}

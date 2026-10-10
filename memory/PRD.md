@@ -64,3 +64,9 @@ Import the `Tax-AI-Assistant` repo (FastAPI + MongoDB + React) from GitHub into 
 - 10-min in-memory cache for web search (pagination instant).
 - Budget/concurrency errors → HTTP 429 with clear Indonesian message.
 - NOTE: each search now costs up to ~3 LLM calls. Key budget ($1) exhausted during iteration_4 → full re-verification pending top-up. Run `pytest backend/tests/test_search_quality.py -n 0` (sequential!).
+
+## Update (2026-10) — case type filter + auto-detection
+- Database filter `db-filter-case-type`: only "Putusan Banding" / "Peninjauan Kembali" (backend regex keyword match). Stale-response guard in loadDatabase (dbReqRef).
+- `_extract_case_type(content, filename)`: PK if filename has PK, strong PK signals (B/PK/PJK nomor, Pemohon/Termohon/Memori PK), or Mahkamah Agung kop before "Pengadilan Pajak" in header; else Banding. "Putusan Pajak"/"Putusan Gugatan" no longer produced. PK title = MA nomor (e.g. 1234 B/PK/PJK/2024).
+- Startup migration re-classifies putusan with other case_type values. Test fixture: /app/test_pk_putusan.pdf. iteration_8: 100%.
+- Removed: "Sumber publik" footer, topbar "Hubungkan Drive" & "File" buttons.
