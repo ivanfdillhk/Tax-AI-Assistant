@@ -116,9 +116,10 @@ def _cache_set(key, value):
 
 async def _grounded_call(system_message: str, user_text: str, session_prefix: str):
     """Call Gemini with Google Search grounding. Returns (content, annotations)."""
-    key = os.environ.get("EMERGENT_LLM_KEY")
+    # Own Gemini key (GEMINI_API_KEY) takes priority; falls back to the Emergent Universal Key.
+    key = (os.environ.get("GEMINI_API_KEY") or "").strip() or os.environ.get("EMERGENT_LLM_KEY")
     if not key:
-        raise RuntimeError("EMERGENT_LLM_KEY not configured")
+        raise RuntimeError("GEMINI_API_KEY / EMERGENT_LLM_KEY not configured")
     chat = (
         LlmChat(api_key=key, session_id=f"{session_prefix}-{uuid.uuid4()}", system_message=system_message)
         .with_model("gemini", GEMINI_MODEL)

@@ -1164,7 +1164,7 @@ async def chat(payload: ChatRequest):
               + f"\n\nDasar peraturan terkait:\n{peraturan_block}")
     system = "Anda adalah asisten analis putusan pajak Indonesia. Jawab dalam Bahasa Indonesia. Gunakan konteks putusan dan dasar peraturan yang disediakan. Setiap klaim penting wajib diberi sitasi inline: paragraf putusan sebagai [P4] dan peraturan sebagai [UU 42/2009] atau [PMK 18/PMK.03/2021]. Jangan memberi nasihat hukum final."
     async def event_stream():
-        chat_session = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"], session_id=f"taxlens-{uuid.uuid4()}", system_message=system).with_model("openai", provider_model)
+        chat_session = LlmChat(api_key=(os.environ.get("OPENAI_API_KEY") or "").strip() or os.environ["EMERGENT_LLM_KEY"], session_id=f"taxlens-{uuid.uuid4()}", system_message=system).with_model("openai", provider_model)
         user_message = UserMessage(text=f"{prompt}\n\nPertanyaan pengguna: {payload.question}")
         async for event in chat_session.stream_message(user_message):
             if isinstance(event, TextDelta):

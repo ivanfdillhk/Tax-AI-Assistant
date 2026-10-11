@@ -82,3 +82,6 @@ Import the `Tax-AI-Assistant` repo (FastAPI + MongoDB + React) from GitHub into 
 ## Update (2026-10-11) — visual edits
 - Putusan lede (`cleanLede`): stops right after the "perihal …" clause (drops ", yang diterima di Pengadilan Pajak …").
 - Document text: PDF page-number connectors ("- 3 -", "-3-") removed in `groupBodyLines` (PAGE_MARK_*_RE) and lede; sentences split by a page break are rejoined.
+
+## Update (2026-10-11) — custom keys
+- backend/.env: added `OPENAI_API_KEY=""` (AI Assistant /api/chat) and `GEMINI_API_KEY=""` (web_search.py: /api/search, /api/ai-search). If set → used directly (litellm, no Emergent proxy); if empty → fallback to EMERGENT_LLM_KEY. Object storage still requires EMERGENT_LLM_KEY.
