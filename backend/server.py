@@ -1140,10 +1140,91 @@ def _match_peraturan_passages(peraturan_items, question, document_body):
     hits.sort(key=lambda item: item[0], reverse=True)
     return hits[:3]
 
+# ---------- LLM key / model selection (own key first, Emergent Universal Key fallback) ----------
+ASSISTANT_MODELS = {
+    "gpt": {"provider": "openai", "model": "gpt-5.6-terra", "label": "GPT 5.6 Terra", "env": "OPENAI_API_KEY"},
+    "gemini": {"provider": "gemini", "model": "gemini-3-flash-preview", "label": "Gemini 3 Flash", "env": "GEMINI_API_KEY"},
+}
+
+
+def _own_key(env_name: str) -> str:
+    return (os.environ.get(env_name) or "").strip()
+
+
+def _assistant_config(model_choice: Optional[str]):
+    choice = "gemini" if (model_choice or "").lower().startswith("gemini") else "gpt"
+    cfg = ASSISTANT_MODELS[choice]
+    key = _own_key(cfg["env"]) or os.environ["EMERGENT_LLM_KEY"]
+    return choice, cfg, key
+
+
+@api_router.get("/key-status")
+async def key_status():
+    """Which key each AI feature uses. Never returns key values."""
+    def src(env_name):
+        return "own" if _own_key(env_name) else "emergent"
+    return {
+        "search": {"source": src("GEMINI_API_KEY"), "env": "GEMINI_API_KEY"},
+        "assistant": {
+            k: {"source": src(v["env"]), "env": v["env"], "label": v["label"]} for k, v in ASSISTANT_MODELS.items()
+        },
+    }
+
+
+class SummaryRequest(BaseModel):
+    model: str = "gpt"
+    refresh: bool = False
+
+
+@api_router.post("/putusan/{document_id}/ai-summary")
+async def putusan_ai_summary(document_id: str, payload: SummaryRequest = SummaryRequest()):
+    import hashlib
+    document = await get_putusan(document_id)
+    body = document.get("body") or ""
+    choice, cfg, key = _assistant_config(payload.model)
+    body_hash = hashlib.sha1(body.encode("utf-8", "ignore")).hexdigest()
+    cached = await db.ai_summaries.find_one({"document_id": document_id, "model": choice}, {"_id": 0})
+    if cached and cached.get("body_hash") == body_hash and not payload.refresh:
+        return {**cached, "cached": True}
+    text = body if len(body) <= 60000 else body[:40000] + "\n...\n" + body[-20000:]
+    system = ("Anda adalah analis putusan Pengadilan Pajak Indonesia. Ringkas putusan secara akurat HANYA berdasarkan teks yang diberikan. "
+              "Jawab dalam Bahasa Indonesia, tanpa markdown (tanpa tanda bintang atau #). Balas HANYA JSON valid dengan kunci: "
+              '"pokok_sengketa" (string, 1-3 kalimat), "amar_putusan" (string, inti amar/putusan akhir), '
+              '"pertimbangan_kunci" (array 3-6 string, alasan hukum utama majelis), '
+              '"dasar_hukum" (array string, peraturan yang dirujuk, maksimal 6), "implikasi" (string, 1-2 kalimat). '
+              "Jika informasi tidak ada di teks, tulis \"Tidak disebutkan dalam dokumen\".")
+    prompt = (f"Judul: {document.get('title','')}\nJenis pajak: {document.get('tax_type','')}\nAmar (metadata): {document.get('verdict','')}\n\nTeks putusan:\n{text}")
+    try:
+        chat_session = LlmChat(api_key=key, session_id=f"taxlens-sum-{uuid.uuid4()}", system_message=system).with_model(cfg["provider"], cfg["model"])
+        raw = await chat_session.send_message(UserMessage(text=prompt))
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("AI summary failed")
+        raise HTTPException(status_code=502, detail=f"Gagal membuat ringkasan AI: {str(exc)[:200]}")
+    raw = (raw or "").strip()
+    match = re.search(r"\{.*\}", raw, re.S)
+    try:
+        data = json.loads(match.group(0) if match else raw)
+    except Exception:
+        data = {"pokok_sengketa": "", "amar_putusan": "", "pertimbangan_kunci": [raw[:1500]], "dasar_hukum": [], "implikasi": ""}
+    def clean(v):
+        return re.sub(r"[*#`]+", "", str(v)).strip()
+    summary = {
+        "pokok_sengketa": clean(data.get("pokok_sengketa", "")),
+        "amar_putusan": clean(data.get("amar_putusan", "")),
+        "pertimbangan_kunci": [clean(x) for x in (data.get("pertimbangan_kunci") or []) if clean(x)][:6],
+        "dasar_hukum": [clean(x) for x in (data.get("dasar_hukum") or []) if clean(x)][:6],
+        "implikasi": clean(data.get("implikasi", "")),
+    }
+    record = {"document_id": document_id, "model": choice, "model_label": cfg["label"], "key_source": "own" if _own_key(cfg["env"]) else "emergent",
+              "body_hash": body_hash, "summary": summary, "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.ai_summaries.replace_one({"document_id": document_id, "model": choice}, record, upsert=True)
+    return {**record, "cached": False}
+
+
 @api_router.post("/chat")
 async def chat(payload: ChatRequest):
     document = await get_putusan(payload.document_id)
-    provider_model = "gpt-5.6-terra" if payload.model != "gemini-3-flash" else "gemini-3-flash-preview"
+    _choice, assistant_cfg, assistant_key = _assistant_config(payload.model)
     paragraphs = paragraph_records(document["body"])
     peraturan_items = await db.peraturan.find({"status": "Berlaku"}, {"_id": 0}).to_list(100)
     reg_hits = _match_peraturan_passages(peraturan_items, payload.question, document["body"])
@@ -1164,7 +1245,7 @@ async def chat(payload: ChatRequest):
               + f"\n\nDasar peraturan terkait:\n{peraturan_block}")
     system = "Anda adalah asisten analis putusan pajak Indonesia. Jawab dalam Bahasa Indonesia. Gunakan konteks putusan dan dasar peraturan yang disediakan. Setiap klaim penting wajib diberi sitasi inline: paragraf putusan sebagai [P4] dan peraturan sebagai [UU 42/2009] atau [PMK 18/PMK.03/2021]. Jangan memberi nasihat hukum final."
     async def event_stream():
-        chat_session = LlmChat(api_key=(os.environ.get("OPENAI_API_KEY") or "").strip() or os.environ["EMERGENT_LLM_KEY"], session_id=f"taxlens-{uuid.uuid4()}", system_message=system).with_model("openai", provider_model)
+        chat_session = LlmChat(api_key=assistant_key, session_id=f"taxlens-{uuid.uuid4()}", system_message=system).with_model(assistant_cfg["provider"], assistant_cfg["model"])
         user_message = UserMessage(text=f"{prompt}\n\nPertanyaan pengguna: {payload.question}")
         async for event in chat_session.stream_message(user_message):
             if isinstance(event, TextDelta):
