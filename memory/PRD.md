@@ -74,3 +74,7 @@ Import the `Tax-AI-Assistant` repo (FastAPI + MongoDB + React) from GitHub into 
 ## Update (2026-10) — readable document view
 - Frontend `groupBodyLines/renderReflowedText`: PDF-wrapped lines joined into paragraphs (p.doc-para), ALL-CAPS section titles → h4.doc-heading (party names like "PT …" excluded), "Key : value" → p.doc-field, legal openers (Telah membaca/Menimbang/…) start new paragraphs. Each source line keeps span#paragraph-Pn (citation IDs unchanged, match backend paragraph_records).
 - `cleanLede()` + backend `_make_summary()`: summary ends at sentence or word boundary (…); action buttons moved below lede (no overlap). Font: Source Serif 4 body, IBM Plex Sans lede. iteration_10: 100%.
+
+## Re-import (2026-10-11)
+- Re-imported repo (main): /app code identical to repo. Backend deps installed (litellm/emergentintegrations conflict bypassed; both present). Frontend yarn up-to-date.
+- Updated EMERGENT_LLM_KEY in backend/.env to current Universal Key. /api/search and /api/ai-search return 200; UI loads.
