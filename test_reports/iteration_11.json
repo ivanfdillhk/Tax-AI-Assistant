@@ -1,0 +1,28 @@
+{
+  "summary": "Tested the 3 new Tax AI features end-to-end (backend + UI). Backend pytest 6/6 PASS covering /api/key-status shape+no-leak, /api/putusan/{id}/ai-summary (fresh/cached/refresh/404/no-asterisks) for both gpt and gemini, and /api/chat SSE for gpt and gemini. UI PASS for all 6 scenarios: search-key-badge 'Kunci Emergent' on Tax Knowledge landing; assistant panel shows model-switch-gpt/gemini + assistant-key-badge 'Kunci Emergent'; gpt default active; clicking Gemini sets active and persists in localStorage ('taxlens-model'='gemini') across reloads; ai-summary-button opens ai-summary-card with loading -> issue/verdict/reasoning(ol x5)/laws/implikasi and ai-summary-meta showing 'GPT 5.6 Terra' then 'GPT 5.6 Terra \u00b7 tersimpan' on second open (cache working); refresh regenerates; copy and close work; card auto-closes when switching document; chat questions stream successfully for both GPT and Gemini models (citation-list rendered 4 chips for gpt, second response produced too). Zero console errors across the entire session.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_key_status_summary_chat.py",
+    "/app/test_reports/pytest/key_summary_chat.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py /key-status correctly returns env name + source only (no key values). Confirmed no 'sk-', 'AIza', or 'EMERGENT_LLM_KEY' leaks in payload.",
+    "_assistant_config falls back to EMERGENT_LLM_KEY via os.environ['EMERGENT_LLM_KEY']; this will KeyError if that env var is ever missing. Consider a guarded lookup with a clear 500 message. (Not a blocker today since EMERGENT_LLM_KEY is set.)",
+    "putusan_ai_summary cache keyed by (document_id, model) + body_hash; refresh:true bypasses correctly. clean() strips asterisks/hash/backticks after JSON parse, which the UI relies on. Verified card contains no '*'.",
+    "/chat SSE streams token/done events as documented; done event carries citations list; works for both gpt (gpt-5.6-terra) and gemini (gemini-3-flash-preview) via emergent fallback.",
+    "App.js L279 saves assistantModel to localStorage; L280 resets aiSummary on document.id change. Both verified in UI."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_key_status_summary_chat.py",
+    "/app/test_reports/pytest/key_summary_chat.xml"
+  ],
+  "success_rate": {"backend": "100% (6/6)", "frontend": "100% (6/6 scenarios)"},
+  "test_credentials": "n/a (no auth)",
+  "seed_data_creation": "None. Only AI summary cache rows written for seeded putusan ids put-pph21-2023 and (indirectly) the first database item during UI flow; harmless, keyed by document_id+model.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All three new features (key-status badge, model switch persistence, AI summary with cache/refresh/close/reset) are verified. Backend tests live at /app/backend/tests/test_key_status_summary_chat.py and run with pytest -o 'addopts=' (project pytest.ini uses pytest-xdist by default). AI summary generation takes ~15-25s per model; chat SSE ~10-30s. No console errors on any page.",
+  "rca of the issue": "N/A \u2014 all features behave as specified."
+}

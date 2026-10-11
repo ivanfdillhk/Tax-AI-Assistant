@@ -85,3 +85,8 @@ Import the `Tax-AI-Assistant` repo (FastAPI + MongoDB + React) from GitHub into 
 
 ## Update (2026-10-11) — custom keys
 - backend/.env: added `OPENAI_API_KEY=""` (AI Assistant /api/chat) and `GEMINI_API_KEY=""` (web_search.py: /api/search, /api/ai-search). If set → used directly (litellm, no Emergent proxy); if empty → fallback to EMERGENT_LLM_KEY. Object storage still requires EMERGENT_LLM_KEY.
+
+## Update (2026-10-11) — key badge, model switch, AI summary
+- `GET /api/key-status` → which key (own/emergent) search & assistant (gpt/gemini) use; no values exposed. Frontend `KeyBadge` on landing (search-key-badge) and assistant panel (assistant-key-badge).
+- Assistant model switch GPT 5.6 Terra (OPENAI_API_KEY) / Gemini 3 Flash (gemini-3-flash-preview, GEMINI_API_KEY), fallback EMERGENT_LLM_KEY; persisted in localStorage `taxlens-model`. `/api/chat` now routes gemini via provider "gemini" (`_assistant_config`).
+- `POST /api/putusan/{id}/ai-summary` {model, refresh} → structured JSON summary (pokok_sengketa, amar_putusan, pertimbangan_kunci, dasar_hukum, implikasi), cached in `db.ai_summaries` by body hash. UI: "Ringkasan AI" button + card (refresh/copy/close). Testing iteration_11: all pass.
