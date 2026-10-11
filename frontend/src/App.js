@@ -76,6 +76,8 @@ const collapseSpacedCaps = (t) => t.replace(/\b(?:[A-Z] ){2,}[A-Z]\b/g, (m) => m
 const endsBlock = (t) => /[.;:!?]["\u201d\u2019')]*$/.test(t.trim());
 const OPENER_RE = /^(Telah\s+(membaca|mendengar|memeriksa)|Menimbang|Mengingat|Memperhatikan|Menetapkan|Memutuskan|Mengadili|Demikian\s+diputus|Dengan\s+demikian)/;
 
+const PAGE_MARK_LINE_RE = /^[-–—‐]\s*\d{1,4}\s*[-–—‐]$/;
+const PAGE_MARK_JOIN_RE = /\n[ \t]*(?:\n[ \t]*)*[-–—‐][ \t]*\d{1,4}[ \t]*[-–—‐][ \t]*(?:\n[ \t]*)+/g;
 const BARE_MARKER_RE = /^(\(?\d{1,3}[.)]|\(?[a-zA-Z][.)]|[-•–])$/;
 const INVISIBLE_RE = /[\u200b-\u200d\u2060\ufeff\u00ad]/g;
 const cleanInvisible = (t) => (t || "").replace(INVISIBLE_RE, "");
@@ -101,9 +103,12 @@ const markerLevel = (m) => (/^[-•–]/.test(m) ? 2 : 1);
 const groupBodyLines = (chunk) => {
   const blocks = []; let current = null; let pendingGap = false;
   const flush = () => { if (current) { blocks.push(current); current = null; } };
-  chunk.split("\n").forEach((raw) => {
+  // drop PDF page-number connectors like "- 3 -" / "-3-" and rejoin text across the page break
+  const cleaned = chunk.replace(PAGE_MARK_JOIN_RE, "\n");
+  cleaned.split("\n").forEach((raw) => {
     const line = raw.trim();
     if (!line) { pendingGap = true; return; }
+    if (PAGE_MARK_LINE_RE.test(cleanInvisible(line).trim())) return;
     const visible = cleanInvisible(line).trim();
     // invisible-only line: keep it (for paragraph numbering) inside the current block
     if (!visible) { if (current) current.lines.push(line); else blocks.push({ type: "ghost", lines: [line] }); return; }
@@ -159,10 +164,23 @@ const renderReflowedText = (chunk, withIds, state) => groupBodyLines(chunk).map(
 
 /* ---------- Lede: a clean, complete-sentence summary ---------- */
 const cleanLede = (summary, body) => {
-  const norm = (t) => deglue(collapseSpacedCaps(cleanInvisible(t).replace(/\[\/?TABLE\]/g, " ").replace(/\s+/g, " ").trim()));
+  const norm = (t) => deglue(collapseSpacedCaps(cleanInvisible(t).replace(/\[\/?TABLE\]/g, " ").replace(/\s+/g, " ").replace(/(^|\s)[-–—‐]\s?\d{1,4}\s?[-–—‐](?=\s|$)/g, " ").replace(/\s+/g, " ").trim()));
+  // Putusan header: stop right after the "perihal ..." explanation (drop "yang diterima di Pengadilan Pajak ...")
+  const cutAtPerihal = (t) => {
+    const p = t.search(/\bperihal\b/i);
+    if (p < 0) return "";
+    const rest = t.slice(p);
+    const m = rest.search(/,?\s*(yang\s+diterima|diterima\s+(di|oleh))\b/i);
+    if (m <= 0) return "";
+    return (t.slice(0, p) + rest.slice(0, m)).replace(/[\s,;:]+$/, "") + ".";
+  };
   const s = norm(summary);
+  const sp = s && cutAtPerihal(s);
+  if (sp) return sp;
   if (s && /[.!?…]$/.test(s) && s.length <= 480) return s;
   const src = norm(body) || s;
+  const bp = src && cutAtPerihal(src.slice(0, 1500));
+  if (bp) return bp;
   if (src.length <= 420) return src;
   const cut = src.slice(0, 420);
   const lastStop = Math.max(cut.lastIndexOf(". "), cut.lastIndexOf("; "));

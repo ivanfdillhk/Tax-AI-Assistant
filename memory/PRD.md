@@ -78,3 +78,7 @@ Import the `Tax-AI-Assistant` repo (FastAPI + MongoDB + React) from GitHub into 
 ## Re-import (2026-10-11)
 - Re-imported repo (main): /app code identical to repo. Backend deps installed (litellm/emergentintegrations conflict bypassed; both present). Frontend yarn up-to-date.
 - Updated EMERGENT_LLM_KEY in backend/.env to current Universal Key. /api/search and /api/ai-search return 200; UI loads.
+
+## Update (2026-10-11) — visual edits
+- Putusan lede (`cleanLede`): stops right after the "perihal …" clause (drops ", yang diterima di Pengadilan Pajak …").
+- Document text: PDF page-number connectors ("- 3 -", "-3-") removed in `groupBodyLines` (PAGE_MARK_*_RE) and lede; sentences split by a page break are rejoined.
